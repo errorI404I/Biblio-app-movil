@@ -18,7 +18,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, Save, Lock, Activity, Sparkles, History, Zap, Pencil, Users, LogOut, Clock, Megaphone, Image as ImageIcon, Trophy, Terminal, PlayCircle, FileDown } from "lucide-react";
+import { Trash2, Save, Lock, Activity, Sparkles, History, Zap, Pencil, Users, LogOut, Clock, Megaphone, Image as ImageIcon, Trophy, Terminal, PlayCircle, FileDown, Archive } from "lucide-react";
+import { PastRankingsManager } from "@/components/PastRankings";
+
 
 
 const ADMIN_PASS = "54321";
