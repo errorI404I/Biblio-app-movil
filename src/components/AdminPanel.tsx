@@ -595,15 +595,17 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
           </div>
         ) : (
           <Tabs defaultValue="live">
-            <TabsList className="grid w-full grid-cols-7">
+            <TabsList className="grid w-full grid-cols-8">
               <TabsTrigger value="live"><Activity className="mr-1 h-4 w-4" />Vivo</TabsTrigger>
               <TabsTrigger value="ranking"><Trophy className="mr-1 h-4 w-4" />Ranking</TabsTrigger>
               <TabsTrigger value="broadcast"><Megaphone className="mr-1 h-4 w-4" />Broad.</TabsTrigger>
               <TabsTrigger value="event"><Sparkles className="mr-1 h-4 w-4" />Evento</TabsTrigger>
               <TabsTrigger value="users"><Users className="mr-1 h-4 w-4" />Users</TabsTrigger>
               <TabsTrigger value="history"><History className="mr-1 h-4 w-4" />Hist.</TabsTrigger>
+              <TabsTrigger value="past"><Archive className="mr-1 h-4 w-4" />Archivo</TabsTrigger>
               <TabsTrigger value="diag"><Terminal className="mr-1 h-4 w-4" />Diag</TabsTrigger>
             </TabsList>
+
 
             <TabsContent value="live" className="mt-4 space-y-3">
               <Button
