@@ -662,12 +662,16 @@ function Index() {
 
 
         <Tabs defaultValue="dashboard" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="leaders" onClick={loadLeaders}>
-              <Trophy className="mr-2 h-4 w-4" /> Líderes
+              <Trophy className="mr-2 h-4 w-4" /> En Vivo
+            </TabsTrigger>
+            <TabsTrigger value="past">
+              <Archive className="mr-2 h-4 w-4" /> Historial
             </TabsTrigger>
           </TabsList>
+
 
           <TabsContent value="dashboard" className="mt-6 space-y-4">
             <Card className="p-5">
