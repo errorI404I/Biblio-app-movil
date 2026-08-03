@@ -464,6 +464,83 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
     loadAll();
   };
 
+  // ===== Cierre de Ciclo / Temporada =====
+  const closeSeason = async () => {
+    setSeasonRunning(true);
+    try {
+      // 1) Traer TODAS las sesiones (no solo las 100 del historial)
+      const { data: all, error: readErr } = await supabase
+        .from("sessions")
+        .select("*")
+        .order("start_time", { ascending: true });
+      if (readErr) throw readErr;
+      const rows = (all ?? []) as Session[];
+
+      // 2) Agregar por usuario: minutos + racha (días consecutivos con actividad)
+      const byUser = new Map<string, { minutes: number; days: Set<string>; lastIp: string }>();
+      for (const s of rows) {
+        const entry = byUser.get(s.user_name) ?? { minutes: 0, days: new Set<string>(), lastIp: ALLOWED_IP };
+        entry.minutes += s.total_minutes ?? 0;
+        entry.days.add(new Date(s.start_time).toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }));
+        byUser.set(s.user_name, entry);
+      }
+      const dayKey = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
+      const streakOf = (days: Set<string>) => {
+        let streak = 0;
+        const cursor = new Date();
+        if (!days.has(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+        while (days.has(dayKey(cursor))) {
+          streak++;
+          cursor.setDate(cursor.getDate() - 1);
+        }
+        return streak;
+      };
+
+      const table = Array.from(byUser, ([user_name, v]) => ({ user_name, ...v }))
+        .sort((a, b) => b.minutes - a.minutes)
+        .map((r, i) => ({
+          "Posición": i + 1,
+          "Nombre de Usuario": r.user_name,
+          "Horas Totales Acumuladas": Math.round((r.minutes / 60) * 100) / 100,
+          "Minutos Totales": r.minutes,
+          "Racha Actual (Días)": streakOf(r.days),
+          "IP Última Conexión": r.lastIp,
+        }));
+
+      // 3) Generar y descargar el .xlsx
+      const XLSX = await import("xlsx");
+      const ws = XLSX.utils.json_to_sheet(table);
+      ws["!cols"] = [{ wch: 10 }, { wch: 24 }, { wch: 24 }, { wch: 16 }, { wch: 18 }, { wch: 18 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Ranking");
+      const stamp = new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
+      XLSX.writeFile(wb, `Ranking_Cierre_${stamp}.xlsx`);
+
+      // 4) Cerrar sesiones activas de emergencia
+      const nowIso = new Date().toISOString();
+      const openOnes = rows.filter((s) => s.end_time == null);
+      for (const s of openOnes) {
+        await supabase.from("sessions").update({ end_time: nowIso, total_minutes: 0 }).eq("id", s.id);
+      }
+
+      // 5) Reiniciar contadores a cero (se conservan los usuarios y su historial de fechas)
+      const { error: resetErr } = await supabase
+        .from("sessions")
+        .update({ total_minutes: 0 })
+        .not("total_minutes", "is", null);
+      if (resetErr) throw resetErr;
+
+      setSeasonConfirm(false);
+      toast.success("¡Ranking exportado con éxito a Excel y base de datos reiniciada a cero!");
+      loadAll();
+    } catch (e: any) {
+      toast.error("Error en el cierre: " + (e?.message ?? "desconocido"));
+    } finally {
+      setSeasonRunning(false);
+    }
+  };
+
+
   // Lista única de usuarios desde el historial + activos
   const allUsers = Array.from(
     new Map(
