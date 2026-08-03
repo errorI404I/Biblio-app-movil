@@ -53,7 +53,11 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
   const [bcastFilePreview, setBcastFilePreview] = useState<string>("");
   const [uploading, setUploading] = useState(false);
   const [bcasts, setBcasts] = useState<any[]>([]);
+  // Cierre de ciclo / temporada
+  const [seasonConfirm, setSeasonConfirm] = useState(false);
+  const [seasonRunning, setSeasonRunning] = useState(false);
   // Diagnóstico
+
   const [diagLogs, setDiagLogs] = useState<string[]>([]);
   const [diagRunning, setDiagRunning] = useState(false);
   const [diagNow, setDiagNow] = useState(Date.now());
