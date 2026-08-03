@@ -41,6 +41,30 @@ export type Database = {
         }
         Relationships: []
       }
+      past_rankings: {
+        Row: {
+          created_at: string
+          id: string
+          rows: Json
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          rows?: Json
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          rows?: Json
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       sessions: {
         Row: {
           created_at: string
