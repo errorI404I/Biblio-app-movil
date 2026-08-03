@@ -890,7 +890,12 @@ function Index() {
               })()}
             </Card>
           </TabsContent>
+
+          <TabsContent value="past" className="mt-6">
+            <PastRankingsPublic />
+          </TabsContent>
         </Tabs>
+
       </div>
     </div>
   );
