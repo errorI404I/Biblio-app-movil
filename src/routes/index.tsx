@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Wifi, WifiOff, LogIn, LogOut, Trophy, Loader2, Sparkles } from "lucide-react";
+import { Wifi, WifiOff, LogIn, LogOut, Trophy, Loader2, Sparkles, Archive } from "lucide-react";
+import { PastRankingsPublic } from "@/components/PastRankings";
+
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { AdminPanel } from "@/components/AdminPanel";
