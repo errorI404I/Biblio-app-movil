@@ -631,8 +631,43 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
               </Card>
             </TabsContent>
 
-            <TabsContent value="ranking" className="mt-4">
+            <TabsContent value="ranking" className="mt-4 space-y-3">
+              <Button
+                onClick={() => setSeasonConfirm(true)}
+                variant="destructive"
+                size="lg"
+                className="w-full font-bold uppercase tracking-wider"
+              >
+                <FileDown className="mr-2 h-5 w-5" /> Descargar Ranking (.xlsx) y Resetear
+              </Button>
+
+              <AlertDialog open={seasonConfirm} onOpenChange={setSeasonConfirm}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>¿Cerrar el ciclo/temporada?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Se descargará el ranking actual en Excel y luego <strong>todos los contadores de horas volverán a 0</strong>.
+                      Las sesiones activas se cerrarán de emergencia. Los usuarios y el historial de fechas se conservan.
+                      Esta acción no se puede deshacer.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={seasonRunning}>Cancelar</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={(e) => {
+                        e.preventDefault();
+                        closeSeason();
+                      }}
+                      disabled={seasonRunning}
+                    >
+                      {seasonRunning ? "Procesando…" : "Descargar y resetear"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+
               <Card className="p-4">
+
                 <h3 className="mb-3 text-sm font-semibold">Ranking · Ajuste manual ({ranking.length})</h3>
                 {ranking.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Sin datos.</p>
