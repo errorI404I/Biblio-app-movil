@@ -985,6 +985,12 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
               </Card>
             </TabsContent>
 
+            <TabsContent value="past" className="mt-4">
+              <PastRankingsManager />
+            </TabsContent>
+
+
+
             <TabsContent value="diag" className="mt-4 space-y-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Card className="p-3">
