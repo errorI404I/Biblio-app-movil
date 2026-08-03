@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Wifi, WifiOff, LogIn, LogOut, Trophy, Loader2, Sparkles } from "lucide-react";
+import { Wifi, WifiOff, LogIn, LogOut, Trophy, Loader2, Sparkles, Archive } from "lucide-react";
+import { PastRankingsPublic } from "@/components/PastRankings";
+
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { AdminPanel } from "@/components/AdminPanel";
@@ -662,12 +664,16 @@ function Index() {
 
 
         <Tabs defaultValue="dashboard" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="leaders" onClick={loadLeaders}>
-              <Trophy className="mr-2 h-4 w-4" /> Líderes
+              <Trophy className="mr-2 h-4 w-4" /> En Vivo
+            </TabsTrigger>
+            <TabsTrigger value="past">
+              <Archive className="mr-2 h-4 w-4" /> Historial
             </TabsTrigger>
           </TabsList>
+
 
           <TabsContent value="dashboard" className="mt-6 space-y-4">
             <Card className="p-5">
@@ -884,7 +890,12 @@ function Index() {
               })()}
             </Card>
           </TabsContent>
+
+          <TabsContent value="past" className="mt-6">
+            <PastRankingsPublic />
+          </TabsContent>
         </Tabs>
+
       </div>
     </div>
   );

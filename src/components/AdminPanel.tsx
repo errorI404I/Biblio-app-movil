@@ -18,7 +18,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, Save, Lock, Activity, Sparkles, History, Zap, Pencil, Users, LogOut, Clock, Megaphone, Image as ImageIcon, Trophy, Terminal, PlayCircle, FileDown } from "lucide-react";
+import { Trash2, Save, Lock, Activity, Sparkles, History, Zap, Pencil, Users, LogOut, Clock, Megaphone, Image as ImageIcon, Trophy, Terminal, PlayCircle, FileDown, Archive } from "lucide-react";
+import { PastRankingsManager } from "@/components/PastRankings";
+
 
 
 const ADMIN_PASS = "54321";
@@ -595,15 +597,17 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
           </div>
         ) : (
           <Tabs defaultValue="live">
-            <TabsList className="grid w-full grid-cols-7">
+            <TabsList className="grid w-full grid-cols-8">
               <TabsTrigger value="live"><Activity className="mr-1 h-4 w-4" />Vivo</TabsTrigger>
               <TabsTrigger value="ranking"><Trophy className="mr-1 h-4 w-4" />Ranking</TabsTrigger>
               <TabsTrigger value="broadcast"><Megaphone className="mr-1 h-4 w-4" />Broad.</TabsTrigger>
               <TabsTrigger value="event"><Sparkles className="mr-1 h-4 w-4" />Evento</TabsTrigger>
               <TabsTrigger value="users"><Users className="mr-1 h-4 w-4" />Users</TabsTrigger>
               <TabsTrigger value="history"><History className="mr-1 h-4 w-4" />Hist.</TabsTrigger>
+              <TabsTrigger value="past"><Archive className="mr-1 h-4 w-4" />Archivo</TabsTrigger>
               <TabsTrigger value="diag"><Terminal className="mr-1 h-4 w-4" />Diag</TabsTrigger>
             </TabsList>
+
 
             <TabsContent value="live" className="mt-4 space-y-3">
               <Button
@@ -980,6 +984,12 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
                 )}
               </Card>
             </TabsContent>
+
+            <TabsContent value="past" className="mt-4">
+              <PastRankingsManager />
+            </TabsContent>
+
+
 
             <TabsContent value="diag" className="mt-4 space-y-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
