@@ -22,14 +22,6 @@ export type BroadcastRow = {
   created_at: string | null;
 };
 
-export type PastRankingRow = {
-  id: string;
-  title: string;
-  rows: unknown;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
 export type SettingsRow = {
   id: string;
   key: string;

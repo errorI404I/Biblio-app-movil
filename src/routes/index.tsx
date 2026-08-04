@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useLeaderboard } from '@/hooks/useLeaderboard';
 import { supabase } from '@/integrations/supabase/client';
 
 const ALLOWED_IP = '131.221.0.8';
@@ -30,12 +31,6 @@ type SessionRow = {
   created_at?: string | null;
   multiplier?: number | null;
   event_name?: string | null;
-};
-
-type Leader = {
-  user_name: string;
-  minutes: number;
-  online: boolean;
 };
 
 function getArgHour(d: Date = new Date()) {
@@ -72,37 +67,14 @@ export default function Index() {
   const [activeSession, setActiveSession] = useState<SessionRow | null>(null);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
-  const [leaders, setLeaders] = useState<Leader[]>([]);
+  const { data: leaders, loading: leadersLoading, error: leadersError, refetch: refetchLeaders } =
+    useLeaderboard({ limit: 50 });
 
   const isAllowed = ip === ALLOWED_IP;
   const systemOpen = isWithinOpenHours(new Date(now));
   const elapsed = activeSession
     ? now - new Date(activeSession.start_time ?? activeSession.star_time ?? new Date().toISOString()).getTime()
     : 0;
-
-  const loadLeaders = useCallback(async () => {
-    const { data, error } = await supabase.from('sessions').select('user_name,total_minutes,end_time');
-    if (error || !data) return;
-
-    const minutesMap = new Map<string, number>();
-    const onlineSet = new Set<string>();
-
-    for (const row of data) {
-      if (row.total_minutes != null) {
-        minutesMap.set(row.user_name, (minutesMap.get(row.user_name) ?? 0) + Number(row.total_minutes ?? 0));
-      }
-      if (row.end_time === null) onlineSet.add(row.user_name);
-    }
-
-    const names = new Set<string>([...minutesMap.keys(), ...onlineSet]);
-    const visible = Array.from(names, (user_name) => ({
-      user_name,
-      minutes: minutesMap.get(user_name) ?? 0,
-      online: onlineSet.has(user_name),
-    })).sort((a, b) => b.minutes - a.minutes);
-
-    setLeaders(visible);
-  }, []);
 
   const checkActiveSession = useCallback(async (name: string) => {
     if (!name) {
@@ -149,21 +121,6 @@ export default function Index() {
   useEffect(() => {
     if (userName) checkActiveSession(userName);
   }, [userName, checkActiveSession]);
-
-  useEffect(() => {
-    loadLeaders();
-  }, [loadLeaders]);
-
-  useEffect(() => {
-    const channel = supabase
-      .channel('sessions-leaderboard-mob')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions' }, () => loadLeaders())
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [loadLeaders]);
 
   const handleCheckIn = async () => {
     const name = userName.trim();
@@ -229,7 +186,7 @@ export default function Index() {
       if (error) throw error;
 
       setActiveSession(null);
-      await loadLeaders();
+      await refetchLeaders();
       Alert.alert('Check-out', 'Tu sesión quedó cerrada.');
     } catch (error) {
       console.error(error);
@@ -297,7 +254,16 @@ export default function Index() {
 
         <View style={styles.card}>
           <Text style={styles.label}>Ranking</Text>
-          {leaders.length === 0 ? (
+          {leadersLoading ? (
+            <ActivityIndicator color="#f59e0b" style={styles.rankLoader} />
+          ) : leadersError ? (
+            <View>
+              <Text style={styles.rankError}>{leadersError}</Text>
+              <Pressable style={styles.retryButton} onPress={() => void refetchLeaders()}>
+                <Text style={styles.retryButtonText}>Reintentar</Text>
+              </Pressable>
+            </View>
+          ) : leaders.length === 0 ? (
             <Text style={styles.meta}>Todavía no hay registros.</Text>
           ) : (
             leaders.map((leader, index) => (
@@ -359,4 +325,15 @@ const styles = StyleSheet.create({
   rankPlace: { color: '#fbbf24', fontWeight: '700', width: 36 },
   rankName: { flex: 1, color: '#f8fafc', fontWeight: '600' },
   rankMinutes: { color: '#cbd5e1', fontWeight: '600' },
+  rankLoader: { marginTop: 12 },
+  rankError: { color: '#fca5a5', marginTop: 8, fontSize: 13 },
+  retryButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    backgroundColor: '#334155',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  retryButtonText: { color: '#f8fafc', fontWeight: '600', fontSize: 13 },
 });
