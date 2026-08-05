@@ -32,15 +32,15 @@ export type SettingsRow = {
   expires_at: string | null;
 };
 
-const env = typeof process !== 'undefined' && process.env ? process.env : {};
-const SUPABASE_URL = env.EXPO_PUBLIC_SUPABASE_URL;
-const SUPABASE_ANON_KEY = env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+// Acceso estático directo para que Expo lo inyecte durante el bundler
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  throw new Error('Missing EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY in Expo env');
+  console.warn('Advertencia: Faltan las variables de entorno de Supabase.');
 }
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+export const supabase = createClient(SUPABASE_URL || '', SUPABASE_ANON_KEY || '', {
   auth: {
     persistSession: true,
     autoRefreshToken: true,

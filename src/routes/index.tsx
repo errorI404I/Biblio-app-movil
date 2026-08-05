@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import MinijuegoScreen from './minijuego';
+import ShopScreen from './shop'; // Asegúrate de tener este archivo creado en la misma carpeta
 import {
   ActivityIndicator,
   Alert,
@@ -61,6 +63,9 @@ function formatDuration(ms: number) {
 }
 
 export default function Index() {
+  // Cambiamos 'Tienda' por 'tienda' en minúsculas para mantener consistencia
+  const [activeTab, setActiveTab] = useState<'home' | 'minijuego' | 'tienda' | 'eventos'>('home');
+
   const [ip, setIp] = useState<string | null>(null);
   const [ipLoading, setIpLoading] = useState(true);
   const [userName, setUserName] = useState('');
@@ -83,7 +88,7 @@ export default function Index() {
     }
 
     const { data, error } = await supabase
-      .from('sessions')
+      .from('sesiones')
       .select('*')
       .eq('user_name', name)
       .is('end_time', null)
@@ -145,7 +150,7 @@ export default function Index() {
 
       const nowIso = new Date().toISOString();
       const { data, error } = await supabase
-        .from('sessions')
+        .from('sesiones')
         .insert({ user_name: name, start_time: nowIso, last_seen: nowIso })
         .select()
         .single();
@@ -175,7 +180,7 @@ export default function Index() {
       const endIso = new Date().toISOString();
       const startTime = new Date(activeSession.start_time ?? activeSession.star_time ?? endIso).getTime();
       const { error } = await supabase
-        .from('sessions')
+        .from('sesiones')
         .update({
           end_time: endIso,
           total_minutes: Math.max(1, Math.round((new Date(endIso).getTime() - startTime) / 60000)),
@@ -205,84 +210,128 @@ export default function Index() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Horas <Text style={styles.accent}>biblio</Text></Text>
-          <Text style={styles.subtitle}>Registro de tiempo de conexión Wi‑Fi</Text>
-        </View>
 
-        <View style={styles.card}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.label}>Estado de la red</Text>
-            <Text style={[styles.status, isAllowed ? styles.ok : styles.warn]}>{statusLabel}</Text>
-          </View>
-          <Text style={styles.meta}>IP: {ip ?? '—'}</Text>
-          <Text style={styles.meta}>Horario: {systemOpen ? 'Abierto' : 'Cerrado'} • {String(OPEN_HOUR_AR).padStart(2, '0')}:00–{String(CLOSE_HOUR_AR).padStart(2, '0')}:00</Text>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.label}>Tu nombre</Text>
-          <TextInput
-            value={userName}
-            onChangeText={setUserName}
-            placeholder="Ingresá tu nombre"
-            placeholderTextColor="#94a3b8"
-            style={styles.input}
-            autoCapitalize="words"
-            autoCorrect={false}
-          />
-
-          <Pressable
-            style={[styles.primaryButton, (!userName.trim() || busy) && styles.disabledButton]}
-            onPress={handleCheckIn}
-            disabled={!userName.trim() || busy}
-          >
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Check-in</Text>}
-          </Pressable>
-
-          {activeSession ? (
-            <View style={styles.activeBox}>
-              <Text style={styles.activeLabel}>Sesión activa</Text>
-              <Text style={styles.activeText}>{activeSession.user_name}</Text>
-              <Text style={styles.elapsed}>Tiempo: {formatDuration(elapsed)}</Text>
-              <Pressable style={styles.secondaryButton} onPress={handleCheckOut} disabled={busy}>
-                <Text style={styles.secondaryButtonText}>Check-out</Text>
-              </Pressable>
+      {/* CONTENIDO CONDICIONAL SEGÚN LA PESTAÑA ACTIVA */}
+      <View style={styles.containerContent}>
+        {activeTab === 'home' && (
+          <ScrollView contentContainerStyle={styles.content}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Horas <Text style={styles.accent}>biblio</Text></Text>
+              <Text style={styles.subtitle}>Registro de tiempo de conexión Wi‑Fi</Text>
             </View>
-          ) : null}
-        </View>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>Ranking</Text>
-          {leadersLoading ? (
-            <ActivityIndicator color="#f59e0b" style={styles.rankLoader} />
-          ) : leadersError ? (
-            <View>
-              <Text style={styles.rankError}>{leadersError}</Text>
-              <Pressable style={styles.retryButton} onPress={() => void refetchLeaders()}>
-                <Text style={styles.retryButtonText}>Reintentar</Text>
-              </Pressable>
-            </View>
-          ) : leaders.length === 0 ? (
-            <Text style={styles.meta}>Todavía no hay registros.</Text>
-          ) : (
-            leaders.map((leader, index) => (
-              <View key={`${leader.user_name}-${index}`} style={styles.rankRow}>
-                <Text style={styles.rankPlace}>#{index + 1}</Text>
-                <Text style={styles.rankName}>{leader.user_name}</Text>
-                <Text style={styles.rankMinutes}>{leader.minutes} min</Text>
+            <View style={styles.card}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.label}>Estado de la red</Text>
+                <Text style={[styles.status, isAllowed ? styles.ok : styles.warn]}>{statusLabel}</Text>
               </View>
-            ))
-          )}
-        </View>
-      </ScrollView>
+              <Text style={styles.meta}>IP: {ip ?? '—'}</Text>
+              <Text style={styles.meta}>Horario: {systemOpen ? 'Abierto' : 'Cerrado'} • {String(OPEN_HOUR_AR).padStart(2, '0')}:00–{String(CLOSE_HOUR_AR).padStart(2, '0')}:00</Text>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.label}>Tu nombre</Text>
+              <TextInput
+                value={userName}
+                onChangeText={setUserName}
+                placeholder="Ingresá tu nombre"
+                placeholderTextColor="#94a3b8"
+                style={styles.input}
+                autoCapitalize="words"
+                autoCorrect={false}
+              />
+
+              <Pressable
+                style={[styles.primaryButton, (!userName.trim() || busy) && styles.disabledButton]}
+                onPress={handleCheckIn}
+                disabled={!userName.trim() || busy}
+              >
+                {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Check-in</Text>}
+              </Pressable>
+
+              {activeSession ? (
+                <View style={styles.activeBox}>
+                  <Text style={styles.activeLabel}>Sesión activa</Text>
+                  <Text style={styles.activeText}>{activeSession.user_name}</Text>
+                  <Text style={styles.elapsed}>Tiempo: {formatDuration(elapsed)}</Text>
+                  <Pressable style={styles.secondaryButton} onPress={handleCheckOut} disabled={busy}>
+                    <Text style={styles.secondaryButtonText}>Check-out</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.label}>Ranking</Text>
+              {leadersLoading ? (
+                <ActivityIndicator color="#f59e0b" style={styles.rankLoader} />
+              ) : leadersError ? (
+                <View>
+                  <Text style={styles.rankError}>{leadersError}</Text>
+                  <Pressable style={styles.retryButton} onPress={() => void refetchLeaders()}>
+                    <Text style={styles.retryButtonText}>Reintentar</Text>
+                  </Pressable>
+                </View>
+              ) : leaders.length === 0 ? (
+                <Text style={styles.meta}>Todavía no hay registros.</Text>
+              ) : (
+                leaders.map((leader, index) => (
+                  <View key={`${leader.user_name}-${index}`} style={styles.rankRow}>
+                    <Text style={styles.rankPlace}>#{index + 1}</Text>
+                    <Text style={styles.rankName}>{leader.user_name}</Text>
+                    <Text style={styles.rankMinutes}>{leader.minutes} min</Text>
+                  </View>
+                ))
+              )}
+            </View>
+          </ScrollView>
+        )}
+
+        {activeTab === 'minijuego' && <MinijuegoScreen />}
+
+        {activeTab === 'tienda' && <ShopScreen />}
+
+        {activeTab === 'eventos' && (
+          <View style={styles.centerScreen}>
+            <Text style={styles.sectionTitle}>📅 Eventos</Text>
+            <Text style={styles.meta}>Sección de próximos eventos y charlas.</Text>
+          </View>
+        )}
+      </View>
+
+      {/* BARRA DE NAVEGACIÓN INFERIOR FIJA */}
+      <View style={styles.bottomNav}>
+        <Pressable 
+          style={[styles.navItem, activeTab === 'home' && styles.navItemActive]} 
+          onPress={() => setActiveTab('home')}
+        >
+          <Text style={[styles.navText, activeTab === 'home' && styles.navTextActive]}>🏠 Inicio</Text>
+        </Pressable>
+
+        <Pressable 
+          style={[styles.navItem, activeTab === 'minijuego' && styles.navItemActive]} 
+          onPress={() => setActiveTab('minijuego')}
+        >
+          <Text style={[styles.navText, activeTab === 'minijuego' && styles.navTextActive]}>🎮 Minijuego</Text>
+        </Pressable>
+
+        <Pressable 
+          style={[styles.navItem, activeTab === 'tienda' && styles.navItemActive]} 
+          onPress={() => setActiveTab('tienda')}
+        >
+          <Text style={[styles.navText, activeTab === 'tienda' && styles.navTextActive]}>🛒 Tienda</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#0f172a' },
+  containerContent: { flex: 1 },
   content: { padding: 20, paddingBottom: 40 },
+  centerScreen: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  sectionTitle: { color: '#f8fafc', fontSize: 24, fontWeight: '700', marginBottom: 8 },
   header: { marginBottom: 20 },
   title: { color: '#f8fafc', fontSize: 36, fontWeight: '700' },
   accent: { color: '#f59e0b' },
@@ -336,4 +385,29 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   retryButtonText: { color: '#f8fafc', fontWeight: '600', fontSize: 13 },
+  bottomNav: {
+    flexDirection: 'row',
+    backgroundColor: '#111827',
+    borderTopWidth: 1,
+    borderTopColor: '#1f2937',
+    height: 60,
+  },
+  navItem: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  navItemActive: {
+    borderTopWidth: 2,
+    borderTopColor: '#f59e0b',
+    backgroundColor: '#1f2937',
+  },
+  navText: {
+    color: '#94a3b8',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  navTextActive: {
+    color: '#f59e0b',
+  },
 });
