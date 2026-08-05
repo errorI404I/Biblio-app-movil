@@ -5,6 +5,33 @@ import { supabase } from '@/integrations/supabase/client';
 
 const STORAGE_KEY = 'horasbiblio_user_name';
 
+// Función auxiliar para disparar la notificación Push de Expo
+async function sendPushNotification(expoPushToken: string, title: string, body: string) {
+  if (!expoPushToken) return;
+
+  const message = {
+    to: expoPushToken,
+    sound: 'default',
+    title: title,
+    body: body,
+    data: { someData: 'goes here' },
+  };
+
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
+  } catch (e) {
+    console.log('Error enviando push notification:', e);
+  }
+}
+
 export default function ShopScreen() {
   const [userName, setUserName] = useState('');
   const [coins, setCoins] = useState(0);
@@ -150,11 +177,11 @@ export default function ShopScreen() {
     }
   };
 
-  // Transferencia con validación visual estricta
+  // Transferencia con validación, notificación interna (campanita) y push de Expo
   const handleTransferCoins = async () => {
     const target = recipientName.trim();
     const amount = parseFloat(transferAmount);
-    setTransferError(''); // Limpiar error visual anterior
+    setTransferError('');
 
     if (!target || !amount || isNaN(amount) || amount <= 0) {
       setTransferError('⚠️ Ingresa un usuario válido y un monto mayor a 0.');
@@ -173,7 +200,7 @@ export default function ShopScreen() {
 
     setTransferring(true);
     try {
-      // Verificamos si el destinatario existe en user_wallet
+      // 1. Verificar destinatario en user_wallet
       const { data: recipientWallet, error: recipErr } = await supabase
         .from('user_wallet')
         .select('*')
@@ -186,7 +213,7 @@ export default function ShopScreen() {
         return;
       }
 
-      // Procedemos con la transferencia
+      // 2. Actualizar saldos
       const newSenderCoins = coins - amount;
       const newRecipientCoins = (recipientWallet.coins || 0) + amount;
 
@@ -203,6 +230,36 @@ export default function ShopScreen() {
         .eq('user_name', target);
 
       if (recipUpdateErr) throw recipUpdateErr;
+
+      // 3. Insertar notificación interna (Campanita)
+      const { error: notifErr } = await supabase.from('notifications').insert({
+        user_name: target,
+        message: `🪙 ¡${userName} te ha enviado ${amount} monedas!`,
+      });
+      if (notifErr) console.log('Error creando notificación interna:', notifErr);
+
+      // 4. Buscar token push del destinatario en sesiones activas
+      const { data: targetSession } = await supabase
+        .from('sesiones')
+        .select('expo_push_token')
+        .eq('user_name', target)
+        .not('expo_push_token', 'is', null)
+        .limit(1)
+        .maybeSingle();
+
+      // 5. Enviar notificación push real de Expo si tiene un token válido
+      if (targetSession?.expo_push_token) {
+        await sendPushNotification(
+          targetSession.expo_push_token,
+          '¡Nueva transferencia! 🪙',
+          `${userName} te ha enviado ${amount} monedas.`
+        );
+      }
+      const { data: targetUser } = await supabase
+  .from('user_wallet')
+  .select('expo_push_token')
+  .eq('user_name', target)
+  .maybeSingle();
 
       setCoins(newSenderCoins);
       setRecipientName('');
