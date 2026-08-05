@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MinijuegoScreen from './minijuego';
-import ShopScreen from './shop'; // Asegúrate de tener este archivo creado en la misma carpeta
+import ShopScreen from './shop';
 import {
   ActivityIndicator,
   Alert,
@@ -63,7 +63,6 @@ function formatDuration(ms: number) {
 }
 
 export default function Index() {
-  // Cambiamos 'Tienda' por 'tienda' en minúsculas para mantener consistencia
   const [activeTab, setActiveTab] = useState<'home' | 'minijuego' | 'tienda' | 'eventos'>('home');
 
   const [ip, setIp] = useState<string | null>(null);
@@ -102,6 +101,7 @@ export default function Index() {
     setActiveSession(data[0] as SessionRow);
   }, []);
 
+  // Persistencia de nombre local
   useEffect(() => {
     const restoreName = async () => {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
@@ -211,7 +211,6 @@ export default function Index() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
 
-      {/* CONTENIDO CONDICIONAL SEGÚN LA PESTAÑA ACTIVA */}
       <View style={styles.containerContent}>
         {activeTab === 'home' && (
           <ScrollView contentContainerStyle={styles.content}>
@@ -261,6 +260,7 @@ export default function Index() {
               ) : null}
             </View>
 
+            {/* RANKING CONVERTIDO A HORAS Y MINUTOS */}
             <View style={styles.card}>
               <Text style={styles.label}>Ranking</Text>
               {leadersLoading ? (
@@ -275,13 +275,20 @@ export default function Index() {
               ) : leaders.length === 0 ? (
                 <Text style={styles.meta}>Todavía no hay registros.</Text>
               ) : (
-                leaders.map((leader, index) => (
-                  <View key={`${leader.user_name}-${index}`} style={styles.rankRow}>
-                    <Text style={styles.rankPlace}>#{index + 1}</Text>
-                    <Text style={styles.rankName}>{leader.user_name}</Text>
-                    <Text style={styles.rankMinutes}>{leader.minutes} min</Text>
-                  </View>
-                ))
+                leaders.map((leader, index) => {
+                  const totalMins = leader.minutes || 0;
+                  const h = Math.floor(totalMins / 60);
+                  const m = totalMins % 60;
+                  const timeFormatted = h > 0 ? `${h}h ${m}m` : `${m}m`;
+
+                  return (
+                    <View key={`${leader.user_name}-${index}`} style={styles.rankRow}>
+                      <Text style={styles.rankPlace}>#{index + 1}</Text>
+                      <Text style={styles.rankName}>{leader.user_name}</Text>
+                      <Text style={styles.rankMinutes}>{timeFormatted}</Text>
+                    </View>
+                  );
+                })
               )}
             </View>
           </ScrollView>
@@ -299,7 +306,6 @@ export default function Index() {
         )}
       </View>
 
-      {/* BARRA DE NAVEGACIÓN INFERIOR FIJA */}
       <View style={styles.bottomNav}>
         <Pressable 
           style={[styles.navItem, activeTab === 'home' && styles.navItemActive]} 

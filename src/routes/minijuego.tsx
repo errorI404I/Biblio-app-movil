@@ -20,9 +20,9 @@ export default function MinijuegoScreen() {
   const [userName, setUserName] = useState('');
   const [password, setPassword] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [passwordError, setPasswordError] = useState(''); // Estado para el mensaje visual de error
 
   const [coins, setCoins] = useState(0);
-  const [totalHours, setTotalHours] = useState(0);
   const [betAmount, setBetAmount] = useState(10);
   const [betChoice, setBetChoice] = useState<'rojo' | 'negro'>('rojo');
   const [spinning, setSpinning] = useState(false);
@@ -33,10 +33,15 @@ export default function MinijuegoScreen() {
   const spinValue = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
+  // Persistencia de sesión: verifica si ya hay un usuario logueado guardado localmente
   useEffect(() => {
     const checkLocalUser = async () => {
       const savedName = await AsyncStorage.getItem(STORAGE_KEY);
-      if (savedName) setUserName(savedName);
+      if (savedName) {
+        setUserName(savedName);
+        setIsLoggedIn(true);
+        fetchUserWallet(savedName);
+      }
     };
     checkLocalUser();
   }, []);
@@ -50,12 +55,25 @@ export default function MinijuegoScreen() {
     ).start();
   }, [pulseAnim]);
 
+  const fetchUserWallet = async (name: string) => {
+    const { data, error } = await supabase
+      .from('user_wallet')
+      .select('coins')
+      .eq('user_name', name)
+      .maybeSingle();
+
+    if (data) {
+      setCoins(data.coins || 0);
+    }
+  };
+
   const handleLoginOrRegister = async () => {
     const name = userName.trim();
     const pass = password.trim();
+    setPasswordError(''); // Limpiar errores previos
 
     if (!name || !pass) {
-      Alert.alert('Campos incompletos', 'Ingresa tu nombre del ranking y tu contraseña.');
+      setPasswordError('Ingresa tu nombre y contraseña.');
       return;
     }
 
@@ -72,11 +90,12 @@ export default function MinijuegoScreen() {
         if (data.password === pass) {
           await AsyncStorage.setItem(STORAGE_KEY, name);
           setIsLoggedIn(true);
-          loadUserDataAndWallet(name);
+          setCoins(data.coins || 0);
         } else {
-          Alert.alert('Contraseña incorrecta', 'La contraseña no coincide.');
+          setPasswordError('❌ Contraseña incorrecta. Inténtalo de nuevo.');
         }
       } else {
+        // Usuario nuevo: por defecto arranca con 0 monedas
         const { error: insertError } = await supabase
           .from('user_wallet')
           .insert({ user_name: name, password: pass, coins: 0 });
@@ -85,33 +104,11 @@ export default function MinijuegoScreen() {
 
         await AsyncStorage.setItem(STORAGE_KEY, name);
         setIsLoggedIn(true);
-        Alert.alert('¡Cuenta creada!', 'Tu contraseña ha sido registrada.');
-        loadUserDataAndWallet(name);
+        setCoins(0);
       }
     } catch (err) {
       console.error(err);
-      Alert.alert('Error', 'No se pudo validar el usuario.');
-    }
-  };
-
-  const loadUserDataAndWallet = async (name: string) => {
-    const { data: sessionData } = await supabase
-      .from('sesiones')
-      .select('total_minutes')
-      .eq('user_name', name);
-
-    if (sessionData) {
-      const totalMins = sessionData.reduce((acc, curr) => acc + (curr.total_minutes || 0), 0);
-      const hours = totalMins / 60;
-      setTotalHours(hours);
-      
-      const calculatedCoins = Math.floor(hours * 0.10 * 10) / 10;
-      setCoins(calculatedCoins);
-
-      await supabase
-        .from('user_wallet')
-        .update({ coins: calculatedCoins })
-        .eq('user_name', name);
+      setPasswordError('❌ Error de conexión al validar usuario.');
     }
   };
 
@@ -124,12 +121,14 @@ export default function MinijuegoScreen() {
     setSpinning(true);
     setLastResult(null);
     setResultType(null);
-    setCoins(prev => prev - betAmount);
+    
+    const newCoins = coins - betAmount;
+    setCoins(newCoins);
+    await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
 
     setSuspenseText('⚡ ¡GIRANDO A MÁXIMA VELOCIDAD!');
     setTimeout(() => setSuspenseText('🔥 Frenando la bolilla...'), 900);
 
-    // Resolución matemática del resultado
     const roll = Math.random() * 100;
     let colorGanador: 'rojo' | 'negro' | 'ninguno' = 'ninguno';
 
@@ -146,30 +145,30 @@ export default function MinijuegoScreen() {
       randomExtraDeg = Math.floor(Math.random() * 40) + 160;
     }
 
-    // Aumentamos a 12 vueltas completas para un efecto visual súper rápido
     const totalVueltas = 360 * 12; 
     const targetAngle = totalVueltas + randomExtraDeg;
 
     spinValue.setValue(0);
     Animated.timing(spinValue, {
       toValue: targetAngle,
-      duration: 1500, // Reducido a 1.5 segundos para máxima velocidad
+      duration: 1500,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
 
-    setTimeout(() => {
+    setTimeout(async () => {
+      let finalCoins = newCoins;
       if (colorGanador === betChoice) {
         const subRoll = Math.random() * 100;
         
         if (subRoll <= 5) {
           const premio = betAmount * 10;
-          setCoins(prev => prev + premio);
+          finalCoins += premio;
           setLastResult(`🔥 ¡JACKPOT LEGENDARIO! ¡Acertaste al ${colorGanador.toUpperCase()} y se activó el 5% secreto! Ganaste ${premio} monedas.`);
           setResultType('jackpot');
         } else {
           const premio = betAmount * 1.5;
-          setCoins(prev => prev + premio);
+          finalCoins += premio;
           setLastResult(`🟢 ¡VICTORIA! Salió ${colorGanador.toUpperCase()}. Acertaste y ganaste ${premio} monedas (x1.5).`);
           setResultType('win');
         }
@@ -177,6 +176,9 @@ export default function MinijuegoScreen() {
         setLastResult(`🔴 Salió ${colorGanador === 'ninguno' ? 'zona neutral' : colorGanador.toUpperCase()}. La casa gana esta vez.`);
         setResultType('lose');
       }
+
+      setCoins(finalCoins);
+      await supabase.from('user_wallet').update({ coins: finalCoins }).eq('user_name', userName);
 
       setSuspenseText('¡RESULTADO DEFINIDO!');
       setSpinning(false);
@@ -213,6 +215,9 @@ export default function MinijuegoScreen() {
             onChangeText={setPassword}
           />
 
+          {/* MENSAJE VISUAL DE ERROR DE CONTRASEÑA */}
+          {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
+
           <Pressable style={styles.spinButton} onPress={handleLoginOrRegister}>
             <Text style={styles.spinButtonText}>Entrar a la Sala</Text>
           </Pressable>
@@ -232,8 +237,6 @@ export default function MinijuegoScreen() {
           <Text style={styles.coinText}>🪙 {coins.toFixed(1)}</Text>
         </Animated.View>
       </View>
-
-      <Text style={styles.bankInfo}>Base de horas (10%): {totalHours.toFixed(1)} hrs disponibles</Text>
 
       <View style={styles.wheelContainer}>
         <View style={styles.wheelGlow} />
@@ -316,13 +319,11 @@ export default function MinijuegoScreen() {
 const styles = StyleSheet.create({
   container: { padding: 20, backgroundColor: '#090d16', flexGrow: 1 },
   loginContainer: { flex: 1, backgroundColor: '#090d16', justifyContent: 'center', padding: 20 },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   appTitle: { color: '#f8fafc', fontSize: 20, fontWeight: '900', letterSpacing: 1 },
   userSub: { color: '#94a3b8', fontSize: 13, marginTop: 2 },
   coinBadge: { backgroundColor: '#1e1b4b', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 24, borderWidth: 2, borderColor: '#f59e0b', shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
   coinText: { color: '#fbbf24', fontWeight: '900', fontSize: 16 },
-  bankInfo: { color: '#64748b', fontSize: 12, marginBottom: 15, fontStyle: 'italic' },
-  
   wheelContainer: { alignItems: 'center', justifyContent: 'center', marginVertical: 12 },
   wheelGlow: { position: 'absolute', width: 190, height: 190, borderRadius: 95, backgroundColor: 'rgba(245, 158, 11, 0.15)', shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 20 },
   wheelWrapper: { width: 170, height: 170, alignItems: 'center', justifyContent: 'center', alignSelf: 'center' },
@@ -332,33 +333,28 @@ const styles = StyleSheet.create({
   wheelPointer: { width: 0, height: 0, backgroundColor: 'transparent', borderStyle: 'solid', borderLeftWidth: 10, borderRightWidth: 10, borderBottomWidth: 20, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#ef4444', position: 'absolute', top: -6, zIndex: 15, alignSelf: 'center', shadowColor: '#ef4444', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 5 },
   wheelSectionRed: { position: 'absolute', width: '50%', height: '100%', backgroundColor: 'rgba(220, 38, 38, 0.5)', left: 0 },
   wheelSectionBlack: { position: 'absolute', width: '50%', height: '100%', backgroundColor: 'rgba(15, 23, 42, 0.9)', right: 0 },
-
   suspenseBox: { alignItems: 'center', marginVertical: 10 },
   suspenseTextHeader: { color: '#38bdf8', fontSize: 14, fontWeight: '800', letterSpacing: 1.5, textTransform: 'uppercase' },
-
   resultBox: { padding: 16, borderRadius: 14, marginBottom: 20, borderWidth: 2, alignItems: 'center', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   resJackpot: { backgroundColor: '#451a03', borderColor: '#f59e0b', shadowColor: '#f59e0b' },
   resWin: { backgroundColor: '#064e3b', borderColor: '#10b981', shadowColor: '#10b981' },
   resLose: { backgroundColor: '#7f1d1d', borderColor: '#ef4444', shadowColor: '#ef4444' },
   resultText: { color: '#f8fafc', textAlign: 'center', fontWeight: '800', fontSize: 15 },
-  
   card: { backgroundColor: '#111827', borderRadius: 20, padding: 20, borderWidth: 1, borderColor: '#1f2937', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 10 },
   sectionTitle: { color: '#f8fafc', fontSize: 22, fontWeight: '900', marginBottom: 4 },
   label: { color: '#cbd5e1', fontWeight: '700', fontSize: 13, marginBottom: 10, letterSpacing: 0.5 },
   input: { borderWidth: 1, borderColor: '#334155', borderRadius: 12, backgroundColor: '#0f172a', color: '#f8fafc', paddingHorizontal: 14, paddingVertical: 14, fontSize: 16, marginBottom: 14, marginTop: 6 },
+  errorText: { color: '#ef4444', fontSize: 13, fontWeight: '700', marginBottom: 12, textAlign: 'center' }, // Estilo para el aviso visual de error
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
-  
   choiceBtn: { flex: 1, padding: 14, borderRadius: 12, backgroundColor: '#1e293b', alignItems: 'center', borderWidth: 2, borderColor: '#334155', flexDirection: 'row', justifyContent: 'center', gap: 6 },
   rojoActive: { backgroundColor: '#7f1d1d', borderColor: '#ef4444', shadowColor: '#ef4444', shadowOpacity: 0.8, shadowRadius: 8 },
   negroActive: { backgroundColor: '#18181b', borderColor: '#71717a', shadowColor: '#71717a', shadowOpacity: 0.8, shadowRadius: 8 },
   choiceTextEmoji: { fontSize: 16 },
   choiceText: { color: '#fff', fontWeight: '900', fontSize: 13 },
-  
   chipBtn: { flex: 1, paddingVertical: 12, backgroundColor: '#1e293b', borderRadius: 10, borderWidth: 1, borderColor: '#334155', alignItems: 'center' },
   chipActive: { backgroundColor: '#f59e0b', borderColor: '#fbbf24', shadowColor: '#f59e0b', shadowOpacity: 0.8, shadowRadius: 6 },
   chipText: { color: '#fff', fontWeight: '900', fontSize: 15 },
-  
-  spinButton: { marginTop: 24, backgroundColor: '#f59e0b', paddingVertical: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.6, shadowRadius: 10 },
+  spinButton: { marginTop: 10, backgroundColor: '#f59e0b', paddingVertical: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.6, shadowRadius: 10 },
   spinButtonText: { color: '#090d16', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
   disabled: { opacity: 0.6 },
 });
