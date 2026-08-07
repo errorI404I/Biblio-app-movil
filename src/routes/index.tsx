@@ -17,6 +17,7 @@ import {
   Text,
   TextInput,
   View,
+  Image,
 } from 'react-native';
 import { useLeaderboard } from '@/hooks/useLeaderboard';
 import { supabase } from '@/integrations/supabase/client';
@@ -179,16 +180,16 @@ export default function Index() {
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
 
-  // Estado para la racha de estudio
   const [userStreak, setUserStreak] = useState(0);
-
-  // Estados del menú flotante inferior derecho
   const [showMenu, setShowMenu] = useState(false);
 
-  // Notificaciones (Campanita en Home)
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  // Estados para el Screamer
+  const [screamerActive, setScreamerActive] = useState(false);
+  const [screamerData, setScreamerData] = useState<{ image: string; isSurprise: boolean } | null>(null);
 
   const { data: leaders, loading: leadersLoading, error: leadersError, refetch: refetchLeaders } =
     useLeaderboard({ limit: 50 });
@@ -238,14 +239,51 @@ export default function Index() {
         .eq('read', false);
 
       if (error) throw error;
-      
       setUnreadCount(0);
     } catch (error) {
       console.log("Error al marcar notificaciones como leídas:", error);
     }
   }, [authUserName]);
 
-  // Restaurar sesión guardada localmente al abrir la app y registrar token push
+  // Función para comprobar y disparar el Screamer
+  const checkAndTriggerScreamer = async (userName: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('pending_punishments')
+        .select('*')
+        .eq('target_user', userName)
+        .eq('triggered', false)
+        .limit(1)
+        .maybeSingle();
+
+      if (error || !data) return;
+
+      await supabase
+        .from('pending_punishments')
+        .update({ triggered: true })
+        .eq('id', data.id);
+
+      const isSurprise = Math.random() < 0.01;
+      let selectedImage = '';
+        if (isSurprise) {
+            selectedImage = require('../../assets/job.png'); 
+        } else {
+            const normalPhotos = [
+                require('../../assets/susto1.jpg'),
+                require('../../assets/susto2.jpeg'),
+                require('../../assets/susto3.jpeg'),
+  ];
+  selectedImage = normalPhotos[Math.floor(Math.random() * normalPhotos.length)];
+}
+
+      setScreamerData({ image: selectedImage, isSurprise });
+      setScreamerActive(true);
+    } catch (err) {
+      console.error('Error al comprobar sustos pendientes:', err);
+    }
+  };
+
+  // Restaurar sesión al abrir la app y verificar sustos de inmediato
   useEffect(() => {
     const restoreSession = async () => {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
@@ -254,12 +292,12 @@ export default function Index() {
         setIsLoggedIn(true);
         await registerForPushNotificationsAsync(saved);
         await fetchUserStreak(saved);
+        await checkAndTriggerScreamer(saved);
       }
     };
     restoreSession();
   }, [fetchUserStreak]);
 
-  // Escuchar notificaciones en tiempo real con Supabase Realtime
   useEffect(() => {
     if (!authUserName) return;
     fetchNotifications(authUserName);
@@ -290,7 +328,6 @@ export default function Index() {
     };
   }, [authUserName, fetchNotifications, fetchUserStreak]);
 
-  // Escuchar broadcasts del administrador en tiempo real
   useEffect(() => {
     const broadcastChannel = supabase
       .channel('public:broadcast')
@@ -303,9 +340,7 @@ export default function Index() {
         },
         (payload) => {
           const newMessage = payload.new as { message: string };
-          
           Alert.alert('📢 Aviso del Admin', newMessage.message);
-          
           Notifications.scheduleNotificationAsync({
             content: {
               title: "Mensaje de la Biblioteca",
@@ -349,6 +384,7 @@ export default function Index() {
           setIsLoggedIn(true);
           await fetchUserStreak(name);
           await registerForPushNotificationsAsync(name);
+          await checkAndTriggerScreamer(name);
         } else {
           setAuthError('❌ Contraseña incorrecta.');
         }
@@ -445,6 +481,7 @@ export default function Index() {
 
       setActiveSession(data as SessionRow);
       await fetchUserStreak(authUserName);
+      await checkAndTriggerScreamer(authUserName);
       Alert.alert('Check-in registrado', `${authUserName} ya quedó activo.`);
     } catch (error) {
       console.error(error);
@@ -534,14 +571,12 @@ export default function Index() {
       <View style={styles.containerContent}>
         {activeTab === 'home' && (
           <ScrollView contentContainerStyle={styles.content}>
-            
             <View style={styles.headerRow}>
               <View>
                 <Text style={styles.title}>Horas <Text style={styles.accent}>biblio</Text></Text>
                 <Text style={styles.subtitle}>Hola, <Text style={{ color: '#f59e0b', fontWeight: '700' }}>{authUserName}</Text></Text>
               </View>
 
-              {/* Campanita de notificaciones en el Home */}
               <Pressable 
                 style={styles.bellButton} 
                 onPress={() => {
@@ -561,7 +596,6 @@ export default function Index() {
               </Pressable>
             </View>
 
-            {/* Desplegable de notificaciones */}
             {showNotificationsModal && (
               <View style={styles.notificationDropdown}>
                 <Text style={styles.dropdownTitle}>📢 Últimas Notificaciones</Text>
@@ -670,7 +704,26 @@ export default function Index() {
         )}
       </View>
 
-      {/* Botón flotante para cerrar sesión */}
+      {/* MODAL DEL SCREAMER */}
+      {screamerActive && screamerData && (
+        <View style={styles.screamerOverlay}>
+          <Image 
+            source={{ uri: screamerData.image }} 
+            style={styles.screamerImage} 
+            resizeMode="cover"
+          />
+          <Text style={styles.screamerTitle}>
+            {screamerData.isSurprise ? '😱 ¡¡SORPRESA TERRORÍFICA (1 en 100)!! 😱' : '👻 ¡Te han mandado un susto! 👻'}
+          </Text>
+          <Pressable 
+            style={styles.screamerButton} 
+            onPress={() => setScreamerActive(false)}
+          >
+            <Text style={styles.screamerButtonText}>¡Cerrar susto!</Text>
+          </Pressable>
+        </View>
+      )}
+
       <View style={styles.floatingContainer}>
         {showMenu && (
           <View style={styles.floatingMenu}>
@@ -772,4 +825,42 @@ const styles = StyleSheet.create({
   navItemActive: { borderTopWidth: 2, borderTopColor: '#f59e0b', backgroundColor: '#1f2937' },
   navText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
   navTextActive: { color: '#f59e0b' },
+  
+  // Estilos del Screamer
+  screamerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 99999,
+    padding: 20,
+  },
+  screamerImage: {
+    width: '100%',
+    height: '60%',
+    borderRadius: 15,
+    marginBottom: 20,
+  },
+  screamerTitle: {
+    color: '#ef4444',
+    fontSize: 20,
+    fontWeight: '900',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  screamerButton: {
+    backgroundColor: '#dc2626',
+    paddingVertical: 14,
+    paddingHorizontal: 30,
+    borderRadius: 12,
+  },
+  screamerButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '900',
+  },
 });

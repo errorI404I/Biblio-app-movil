@@ -48,9 +48,16 @@ export default function ShopScreen() {
   const [transferError, setTransferError] = useState('');
   const [transferring, setTransferring] = useState(false);
 
-  // Estados para el autocompletado de usuarios
+  // Estados para el autocompletado de transferencia de monedas
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Estados específicos para el ítem de Screamer (Castigo)
+  const [screamerModalVisible, setScreamerModalVisible] = useState(false);
+  const [screamerTarget, setScreamerTarget] = useState('');
+  const [screamerSuggestions, setScreamerSuggestions] = useState<string[]>([]);
+  const [showScreamerSuggestions, setShowScreamerSuggestions] = useState(false);
+  const [screamerLoading, setScreamerLoading] = useState(false);
 
   const [purchasingId, setPurchasingId] = useState<string | null>(null);
 
@@ -137,10 +144,9 @@ export default function ShopScreen() {
     setShopItems(SHOP_ITEMS);
   };
 
-  // Función para manejar la búsqueda de usuarios en tiempo real para el autocompletado
+  // Autocompletado general para transferencias
   const handleSearchUsers = async (text: string) => {
     setRecipientName(text);
-    
     if (text.trim().length === 0) {
       setSuggestions([]);
       setShowSuggestions(false);
@@ -154,10 +160,31 @@ export default function ShopScreen() {
       .limit(5);
 
     if (data && !error) {
-      // Excluir al propio usuario de las sugerencias de transferencia
       const names = data.map(item => item.user_name).filter(n => n.toLowerCase() !== userName.toLowerCase());
       setSuggestions(names);
       setShowSuggestions(names.length > 0);
+    }
+  };
+
+  // Autocompletado específico para el buscador de la víctima del Screamer
+  const handleSearchScreamerTarget = async (text: string) => {
+    setScreamerTarget(text);
+    if (text.trim().length === 0) {
+      setScreamerSuggestions([]);
+      setShowScreamerSuggestions(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('user_wallet')
+      .select('user_name')
+      .ilike('user_name', `%${text}%`)
+      .limit(5);
+
+    if (data && !error) {
+      const names = data.map(item => item.user_name).filter(n => n.toLowerCase() !== userName.toLowerCase());
+      setScreamerSuggestions(names);
+      setShowScreamerSuggestions(names.length > 0);
     }
   };
 
@@ -178,7 +205,6 @@ export default function ShopScreen() {
       if (fetchErr || !sessions) throw fetchErr;
 
       let remainingToSubtract = minutesNeeded;
-      
       for (const sess of sessions) {
         if (remainingToSubtract <= 0) break;
         const currentMins = sess.total_minutes || 0;
@@ -195,11 +221,7 @@ export default function ShopScreen() {
       }
 
       const newCoins = coins + hoursToCoinsRate;
-      
-      await supabase
-        .from('user_wallet')
-        .update({ coins: newCoins })
-        .eq('user_name', userName);
+      await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
 
       setCoins(newCoins);
       setTotalMinutes(prev => prev - 60);
@@ -220,11 +242,7 @@ export default function ShopScreen() {
       const newCoins = coins - coinsToHoursRate;
       const nowIso = new Date().toISOString();
 
-      const { error: walletErr } = await supabase
-        .from('user_wallet')
-        .update({ coins: newCoins })
-        .eq('user_name', userName);
-
+      const { error: walletErr } = await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
       if (walletErr) throw walletErr;
 
       const { error: sessionErr } = await supabase.from('sesiones').insert({
@@ -285,32 +303,16 @@ export default function ShopScreen() {
       const newSenderCoins = coins - amount;
       const newRecipientCoins = (recipientWallet.coins || 0) + amount;
 
-      const { error: sendError } = await supabase
-        .from('user_wallet')
-        .update({ coins: newSenderCoins })
-        .eq('user_name', userName);
+      await supabase.from('user_wallet').update({ coins: newSenderCoins }).eq('user_name', userName);
+      await supabase.from('user_wallet').update({ coins: newRecipientCoins }).eq('user_name', target);
 
-      if (sendError) throw sendError;
-
-      const { error: recipUpdateErr } = await supabase
-        .from('user_wallet')
-        .update({ coins: newRecipientCoins })
-        .eq('user_name', target);
-
-      if (recipUpdateErr) throw recipUpdateErr;
-
-      const { error: notifErr } = await supabase.from('notifications').insert({
+      await supabase.from('notifications').insert({
         user_name: target,
         message: `🪙 ¡${userName} te ha enviado ${amount} monedas!`,
       });
-      if (notifErr) console.log('Error creando notificación interna:', notifErr);
 
       if (recipientWallet?.expo_push_token) {
-        await sendPushNotification(
-          recipientWallet.expo_push_token,
-          '¡Nueva transferencia! 🪙',
-          `${userName} te ha enviado ${amount} monedas.`
-        );
+        await sendPushNotification(recipientWallet.expo_push_token, '¡Nueva transferencia! 🪙', `${userName} te ha enviado ${amount} monedas.`);
       }
 
       setCoins(newSenderCoins);
@@ -326,7 +328,80 @@ export default function ShopScreen() {
     }
   };
 
+  const handleBuyScreamer = async () => {
+    const target = screamerTarget.trim();
+    const screamerPrice = 30;
+
+    if (!target) {
+      showSuccessModal('⚠️ Ingresa el nombre de la víctima.');
+      return;
+    }
+
+    if (target.toLowerCase() === userName.toLowerCase()) {
+      showSuccessModal('⚠️ No te puedes asustar a ti mismo.');
+      return;
+    }
+
+    if (coins < screamerPrice) {
+      showSuccessModal(`⚠️ Necesitas ${screamerPrice} monedas para enviar este susto.`);
+      return;
+    }
+
+    setScreamerLoading(true);
+    try {
+      const { data: targetUser } = await supabase
+        .from('user_wallet')
+        .select('user_name')
+        .eq('user_name', target)
+        .maybeSingle();
+
+      if (!targetUser) {
+        showSuccessModal(`❌ El usuario "${target}" no existe.`);
+        setScreamerLoading(false);
+        return;
+      }
+
+      const newCoins = coins - screamerPrice;
+
+      const { error: walletErr } = await supabase
+        .from('user_wallet')
+        .update({ coins: newCoins })
+        .eq('user_name', userName);
+
+      if (walletErr) throw walletErr;
+
+      const { error: punErr } = await supabase
+        .from('pending_punishments')
+        .insert({
+          target_user: target,
+          from_user: userName,
+          punishment_type: 'screamer',
+          amount: screamerPrice,
+          triggered: false
+        });
+
+      if (punErr) throw punErr;
+
+      setCoins(newCoins);
+      setScreamerTarget('');
+      setScreamerModalVisible(false);
+      setShowScreamerSuggestions(false);
+      showSuccessModal(`👻 ¡Susto enviado con éxito a ${target}!\nLe aparecerá en su próximo check-in.`);
+
+    } catch (err) {
+      console.error(err);
+      showSuccessModal('❌ No se pudo programar el susto.');
+    } finally {
+      setScreamerLoading(false);
+    }
+  };
+
   const handleBuyItem = async (item: any) => {
+    if (item.id === 'screamer_susto') {
+      setScreamerModalVisible(true);
+      return;
+    }
+
     if (activeItemsMap[item.id]) {
       showSuccessModal('⚠️ Ya tienes este ítem activo o adquirido.');
       return;
@@ -419,8 +494,7 @@ export default function ShopScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>🤝 Transferir Monedas</Text>
         
-        {/* Contenedor del Input con Autocompletado */}
-        <View style={{ position: 'relative', zIndex: 50 }}>
+        <View style={{ position: 'relative', zIndex: 999, elevation: 5 }}>
           <TextInput
             style={styles.input}
             placeholder="Nombre del destinatario"
@@ -432,18 +506,20 @@ export default function ShopScreen() {
 
           {showSuggestions && (
             <View style={styles.suggestionsContainer}>
-              {suggestions.map((item, index) => (
-                <Pressable
-                  key={index}
-                  style={styles.suggestionItem}
-                  onPress={() => {
-                    setRecipientName(item);
-                    setShowSuggestions(false);
-                  }}
-                >
-                  <Text style={{ color: '#f8fafc', fontSize: 14 }}>👤 {item}</Text>
-                </Pressable>
-              ))}
+              <ScrollView nestedScrollEnabled={true} style={{ maxHeight: 180 }}>
+                {suggestions.map((item, index) => (
+                  <Pressable
+                    key={index}
+                    style={styles.suggestionItem}
+                    onPress={() => {
+                      setRecipientName(item);
+                      setShowSuggestions(false);
+                    }}
+                  >
+                    <Text style={{ color: '#f8fafc', fontSize: 14 }}>👤 {item}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
             </View>
           )}
         </View>
@@ -473,6 +549,20 @@ export default function ShopScreen() {
       </View>
 
       <Text style={styles.sectionTitle}>Ítems Disponibles</Text>
+
+      <View style={styles.itemCard}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.itemName}>👻 Susto / Screamer</Text>
+          <Text style={styles.itemDesc}>Asusta a alguien en su próximo check-in con una sorpresa terrorífica.</Text>
+          <Text style={styles.itemPrice}>🪙 30 Monedas</Text>
+        </View>
+        <Pressable 
+          style={[styles.buyButton, { backgroundColor: '#7c3aed' }]} 
+          onPress={() => handleBuyItem({ id: 'screamer_susto', title: 'Screamer', price: 30 })}
+        >
+          <Text style={styles.buyButtonText}>Comprar</Text>
+        </Pressable>
+      </View>
       
       {shopItems.length === 0 ? (
         <Text style={styles.emptyText}>No hay ítems cargados en la tienda todavía.</Text>
@@ -506,6 +596,64 @@ export default function ShopScreen() {
             </View>
           );
         })
+      )}
+
+      {/* MODAL PARA SELECCIONAR VÍCTIMA DEL SCREAMER CON AUTOCOMPLETADO CORREGIDO */}
+      {screamerModalVisible && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>👻 ¡Enviar un Susto!</Text>
+            <Text style={styles.modalText}>¿A qué usuario quieres enviarle el screamer?</Text>
+            
+            {/* Contenedor con zIndex masivo y overflow visible para producción */}
+            <View style={{ position: 'relative', zIndex: 99999, elevation: 99, width: '100%', marginBottom: 15 }}>
+              <TextInput
+                style={[styles.input, { width: '100%', marginBottom: 0 }]}
+                placeholder="Nombre de la víctima"
+                placeholderTextColor="#64748b"
+                value={screamerTarget}
+                onChangeText={handleSearchScreamerTarget}
+                autoCapitalize="words"
+              />
+
+              {showScreamerSuggestions && (
+                <View style={styles.suggestionsContainer}>
+                  <ScrollView nestedScrollEnabled={true} style={{ maxHeight: 150 }}>
+                    {screamerSuggestions.map((item, index) => (
+                      <Pressable
+                        key={index}
+                        style={styles.suggestionItem}
+                        onPress={() => {
+                          setScreamerTarget(item);
+                          setShowScreamerSuggestions(false);
+                        }}
+                      >
+                        <Text style={{ color: '#f8fafc', fontSize: 14 }}>👤 {item}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+            </View>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%' }}>
+              <Pressable 
+                style={[styles.modalButton, { backgroundColor: '#475569', flex: 1, marginRight: 8 }]} 
+                onPress={() => setScreamerModalVisible(false)}
+              >
+                <Text style={[styles.modalButtonText, { color: '#fff' }]}>Cancelar</Text>
+              </Pressable>
+
+              <Pressable 
+                style={[styles.modalButton, { backgroundColor: '#7c3aed', flex: 1, marginLeft: 8 }, screamerLoading && styles.disabled]} 
+                onPress={handleBuyScreamer}
+                disabled={screamerLoading}
+              >
+                {screamerLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalButtonText}>Enviar Susto</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
       )}
 
       {modalVisible && (
@@ -546,19 +694,18 @@ const styles = StyleSheet.create({
   actionButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   input: { borderWidth: 1, borderColor: '#334155', borderRadius: 10, backgroundColor: '#0f172a', color: '#f8fafc', paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginBottom: 10 },
   
-  // Estilos de la lista desplegable de autocompletado
   suggestionsContainer: {
     position: 'absolute',
-    top: 48,
+    top: 50,
     left: 0,
     right: 0,
     backgroundColor: '#1e293b',
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#334155',
-    zIndex: 100,
-    overflow: 'hidden',
-    marginBottom: 10,
+    zIndex: 99999, // Aumentado para producción
+    elevation: 999, // Elevación alta para Android nativo
+    maxHeight: 180,
   },
   suggestionItem: {
     padding: 12,
@@ -602,6 +749,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.5,
     shadowRadius: 15,
+    overflow: 'visible', // Clave para que las sugerencias no se corten
   },
   modalTitle: {
     color: '#fbbf24',
