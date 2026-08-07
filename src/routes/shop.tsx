@@ -41,6 +41,9 @@ export default function ShopScreen() {
   const [shopItems, setShopItems] = useState(SHOP_ITEMS);
   const [loading, setLoading] = useState(true);
 
+  // Estado para llevar el registro de qué ítems ya están activos/comprados
+  const [activeItemsMap, setActiveItemsMap] = useState<{ [key: string]: boolean }>({});
+
   // Estados para transferencia y errores visuales
   const [recipientName, setRecipientName] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
@@ -111,6 +114,29 @@ export default function ShopScreen() {
       if (cth) setCoinsToHoursRate(Number(cth.value));
     }
 
+    // Cargar inventario del usuario para marcar botones como activos/comprados
+    const { data: invData } = await supabase
+      .from('user_inventory')
+      .select('item_id, expires_at, is_active')
+      .eq('user_name', name)
+      .eq('is_active', true);
+
+    const activeMap: { [key: string]: boolean } = {};
+    if (invData) {
+      const nowTime = Date.now();
+      invData.forEach((inv) => {
+        if (inv.expires_at) {
+          // Si tiene expiración, verificar que no haya vencido
+          if (new Date(inv.expires_at).getTime() > nowTime) {
+            activeMap[inv.item_id] = true;
+          }
+        } else {
+          // Si es permanente (eterno)
+          activeMap[inv.item_id] = true;
+        }
+      });
+    }
+    setActiveItemsMap(activeMap);
     setShopItems(SHOP_ITEMS);
   };
 
@@ -279,6 +305,11 @@ export default function ShopScreen() {
   };
 
   const handleBuyItem = async (item: any) => {
+    if (activeItemsMap[item.id]) {
+      showSuccessModal('⚠️ Ya tienes este ítem activo o adquirido.');
+      return;
+    }
+
     if (coins < item.price) {
       showSuccessModal('⚠️ Monedas insuficientes.');
       return;
@@ -287,36 +318,7 @@ export default function ShopScreen() {
     setPurchasingId(item.id);
 
     try {
-      // 1. Verificar si ya posee el ítem en su inventario
-      const { data: existingRecords, error: fetchErr } = await supabase
-        .from('user_inventory')
-        .select('*')
-        .eq('user_name', userName)
-        .eq('item_id', item.id);
-
-      if (fetchErr) throw fetchErr;
-
-      const existingItem = existingRecords && existingRecords.length > 0 ? existingRecords[0] : null;
-
-      // Si es un ítem eterno (permanente) y ya lo tiene comprado, bloquear
-      if (existingItem && item.type === 'eterno') {
-        showSuccessModal('⚠️ Ya posees este ítem permanente.');
-        setPurchasingId(null);
-        return;
-      }
-
-      // Si es temporal, verificar si todavía sigue vigente (su fecha de expiración es mayor al momento actual)
-      if (existingItem && item.type === 'temporal' && existingItem.expires_at) {
-        const expiresTime = new Date(existingItem.expires_at).getTime();
-        const nowTime = Date.now();
-        if (expiresTime > nowTime) {
-          showSuccessModal('⚠️ Ya tienes este ítem activo. ¡Espera a que expire para volver a comprarlo!');
-          setPurchasingId(null);
-          return;
-        }
-      }
-
-      // 2. Descontar monedas de la billetera
+      // 1. Descontar monedas
       const newCoins = coins - item.price;
       const { error: walletError } = await supabase
         .from('user_wallet')
@@ -325,12 +327,12 @@ export default function ShopScreen() {
 
       if (walletError) throw walletError;
 
-      // 3. Calcular fecha de expiración si es temporal (24 horas)
+      // 2. Calcular fecha de expiración si es temporal
       const expiresAt = item.type === 'temporal' 
         ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() 
         : null;
 
-      // 4. Guardar o actualizar en el inventario
+      // 3. Guardar en inventario
       const { error: invError } = await supabase
         .from('user_inventory')
         .upsert({
@@ -344,6 +346,7 @@ export default function ShopScreen() {
       if (invError) throw invError;
 
       setCoins(newCoins);
+      setActiveItemsMap(prev => ({ ...prev, [item.id]: true }));
       showSuccessModal(`¡Compra exitosa: ${item.title}! 🎉`);
 
     } catch (err) {
@@ -432,26 +435,35 @@ export default function ShopScreen() {
       <FlatList
         data={shopItems}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <View style={styles.itemCard}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.itemName}>{item.title}</Text>
-              <Text style={styles.itemDesc}>{item.description}</Text>
-              <Text style={styles.itemPrice}>🪙 {item.price} Monedas</Text>
+        renderItem={({ item }) => {
+          const isOwnedOrActive = activeItemsMap[item.id];
+          return (
+            <View style={styles.itemCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemName}>{item.title}</Text>
+                <Text style={styles.itemDesc}>{item.description}</Text>
+                <Text style={styles.itemPrice}>🪙 {item.price} Monedas</Text>
+              </View>
+              <Pressable 
+                style={[
+                  styles.buyButton, 
+                  isOwnedOrActive && styles.disabledButton,
+                  purchasingId === item.id && { backgroundColor: '#065f46' }
+                ]} 
+                onPress={() => handleBuyItem(item)}
+                disabled={purchasingId !== null || isOwnedOrActive}
+              >
+                {purchasingId === item.id ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.buyButtonText}>
+                    {isOwnedOrActive ? 'Adquirido' : 'Comprar'}
+                  </Text>
+                )}
+              </Pressable>
             </View>
-            <Pressable 
-              style={[styles.buyButton, purchasingId === item.id && { backgroundColor: '#065f46' }]} 
-              onPress={() => handleBuyItem(item)}
-              disabled={purchasingId !== null}
-            >
-              {purchasingId === item.id ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.buyButtonText}>Comprar</Text>
-              )}
-            </Pressable>
-          </View>
-        )}
+          );
+        }}
         ListEmptyComponent={<Text style={styles.emptyText}>No hay ítems cargados en la tienda todavía.</Text>}
       />
 
@@ -500,6 +512,7 @@ const styles = StyleSheet.create({
   itemPrice: { color: '#fbbf24', fontSize: 13, fontWeight: '600' },
   buyButton: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, minWidth: 80, alignItems: 'center' },
   buyButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  disabledButton: { backgroundColor: '#475569', opacity: 0.8 }, // Color gris para el botón inactivo/adquirido
   emptyText: { color: '#64748b', textAlign: 'center', marginTop: 20 },
   disabled: { opacity: 0.6 },
 
