@@ -277,76 +277,82 @@ export default function ShopScreen() {
       setTransferring(false);
     }
   };
-const handleBuyItem = async (item: any) => {
-  if (coins < item.price) {
-    showSuccessModal('⚠️ Monedas insuficientes.');
-    return;
-  }
 
-  setPurchasingId(item.id);
-
-  try {
-    // 1. Verificar si ya tiene el ítem y si está activo
-    const { data: existingItem } = await supabase
-      .from('user_inventory')
-      .select('*')
-      .eq('user_name', userName)
-      .eq('item_id', item.id)
-      .maybeSingle();
-
-    // Si es un ítem eterno y ya lo tiene, no dejar comprar
-    if (existingItem && item.type === 'eterno') {
-      showSuccessModal('⚠️ Ya posees este ítem permanente.');
-      setPurchasingId(null);
+  const handleBuyItem = async (item: any) => {
+    if (coins < item.price) {
+      showSuccessModal('⚠️ Monedas insuficientes.');
       return;
     }
 
-    // Si es temporal, verificar si sigue activo (fecha de expiración mayor a ahora)
-    if (existingItem && item.type === 'temporal') {
-      const now = new Date();
-      if (new Date(existingItem.expires_at) > now) {
-        showSuccessModal('⚠️ Ya tienes este ítem activo. ¡Espera a que expire!');
+    setPurchasingId(item.id);
+
+    try {
+      // 1. Verificar si ya posee el ítem en su inventario
+      const { data: existingRecords, error: fetchErr } = await supabase
+        .from('user_inventory')
+        .select('*')
+        .eq('user_name', userName)
+        .eq('item_id', item.id);
+
+      if (fetchErr) throw fetchErr;
+
+      const existingItem = existingRecords && existingRecords.length > 0 ? existingRecords[0] : null;
+
+      // Si es un ítem eterno (permanente) y ya lo tiene comprado, bloquear
+      if (existingItem && item.type === 'eterno') {
+        showSuccessModal('⚠️ Ya posees este ítem permanente.');
         setPurchasingId(null);
         return;
       }
+
+      // Si es temporal, verificar si todavía sigue vigente (su fecha de expiración es mayor al momento actual)
+      if (existingItem && item.type === 'temporal' && existingItem.expires_at) {
+        const expiresTime = new Date(existingItem.expires_at).getTime();
+        const nowTime = Date.now();
+        if (expiresTime > nowTime) {
+          showSuccessModal('⚠️ Ya tienes este ítem activo. ¡Espera a que expire para volver a comprarlo!');
+          setPurchasingId(null);
+          return;
+        }
+      }
+
+      // 2. Descontar monedas de la billetera
+      const newCoins = coins - item.price;
+      const { error: walletError } = await supabase
+        .from('user_wallet')
+        .update({ coins: newCoins })
+        .eq('user_name', userName);
+
+      if (walletError) throw walletError;
+
+      // 3. Calcular fecha de expiración si es temporal (24 horas)
+      const expiresAt = item.type === 'temporal' 
+        ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() 
+        : null;
+
+      // 4. Guardar o actualizar en el inventario
+      const { error: invError } = await supabase
+        .from('user_inventory')
+        .upsert({
+          user_name: userName,
+          item_id: item.id,
+          is_active: true,
+          expires_at: expiresAt,
+          type: item.type
+        }, { onConflict: 'user_name, item_id' });
+
+      if (invError) throw invError;
+
+      setCoins(newCoins);
+      showSuccessModal(`¡Compra exitosa: ${item.title}! 🎉`);
+
+    } catch (err) {
+      console.error(err);
+      showSuccessModal('❌ No se pudo procesar la compra.');
+    } finally {
+      setPurchasingId(null);
     }
-
-    // 2. Proceder con la compra
-    const newCoins = coins - item.price;
-    const { error: walletError } = await supabase
-      .from('user_wallet')
-      .update({ coins: newCoins })
-      .eq('user_name', userName);
-
-    if (walletError) throw walletError;
-
-    // 3. Upsert en el inventario
-    const expiresAt = item.type === 'temporal' 
-      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() 
-      : null;
-
-    const { error: invError } = await supabase
-      .from('user_inventory')
-      .upsert({
-        user_name: userName,
-        item_id: item.id,
-        is_active: true,
-        expires_at: expiresAt,
-        type: item.type
-      }, { onConflict: 'user_name, item_id' }); // Asegúrate de tener un índice de unicidad aquí
-
-    if (invError) throw invError;
-
-    setCoins(newCoins);
-    showSuccessModal(`¡Compra exitosa: ${item.title}!`);
-
-  } catch (err) {
-    console.error(err);
-    showSuccessModal('❌ Error al procesar la compra.');
-  } finally {
-    setPurchasingId(null);
-  }
-};
+  };
 
   if (loading) {
     return (
@@ -356,19 +362,6 @@ const handleBuyItem = async (item: any) => {
     );
   }
 
-  const checkActiveMultipliers = async (name: string) => {
-  const now = new Date().toISOString();
-  
-  // Buscar ítems temporales activos que no hayan expirado
-  const { data: activeItems } = await supabase
-    .from('user_inventory')
-    .select('*')
-    .eq('user_name', name)
-    .eq('is_active', true)
-    .gt('expires_at', now); // Esto filtra automáticamente los que ya vencieron
-    
-  return activeItems;
-};
   const hoursDisplay = Math.floor(totalMinutes / 60);
   const minsDisplay = totalMinutes % 60;
 
