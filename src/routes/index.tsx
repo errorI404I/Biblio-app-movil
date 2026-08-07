@@ -181,6 +181,7 @@ export default function Index() {
   // Notificaciones (Campanita en Home)
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const { data: leaders, loading: leadersLoading, error: leadersError, refetch: refetchLeaders } =
     useLeaderboard({ limit: 50 });
@@ -200,7 +201,11 @@ export default function Index() {
       .order('created_at', { ascending: false })
       .limit(10);
 
-    if (!error && data) setNotifications(data);
+    if (!error && data) {
+      setNotifications(data);
+      const unread = data.filter((n) => !n.read).length;
+      setUnreadCount(unread);
+    }
   }, []);
 
   const fetchUserStreak = useCallback(async (name: string) => {
@@ -215,6 +220,23 @@ export default function Index() {
       setUserStreak(streak);
     }
   }, []);
+
+  const marcarNotificacionesComoLeidas = useCallback(async () => {
+    if (!authUserName) return;
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('user_name', authUserName)
+        .eq('read', false);
+
+      if (error) throw error;
+      
+      setUnreadCount(0);
+    } catch (error) {
+      console.log("Error al marcar notificaciones como leídas:", error);
+    }
+  }, [authUserName]);
 
   // Restaurar sesión guardada localmente al abrir la app y registrar token push
   useEffect(() => {
@@ -247,7 +269,11 @@ export default function Index() {
           filter: `user_name=eq.${authUserName}`,
         },
         (payload) => {
-          setNotifications((prev) => [payload.new as NotificationRow, ...prev].slice(0, 10));
+          setNotifications((prev) => {
+            const updated = [payload.new as NotificationRow, ...prev].slice(0, 10);
+            setUnreadCount(updated.filter((n) => !n.read).length);
+            return updated;
+          });
         }
       )
       .subscribe();
@@ -271,10 +297,8 @@ export default function Index() {
         (payload) => {
           const newMessage = payload.new as { message: string };
           
-          // Alerta visual inmediata
           Alert.alert('📢 Aviso del Admin', newMessage.message);
           
-          // Disparar notificación push local
           Notifications.scheduleNotificationAsync({
             content: {
               title: "Mensaje de la Biblioteca",
@@ -317,7 +341,6 @@ export default function Index() {
           setAuthUserName(name);
           setIsLoggedIn(true);
           await fetchUserStreak(name);
-          // 👈 Asegurar registro del token aquí
           await registerForPushNotificationsAsync(name);
         } else {
           setAuthError('❌ Contraseña incorrecta.');
@@ -332,7 +355,6 @@ export default function Index() {
         setAuthUserName(name);
         setIsLoggedIn(true);
         await fetchUserStreak(name);
-        // 👈 Asegurar registro del token aquí también para nuevos
         await registerForPushNotificationsAsync(name);
       }
     } catch (err) {
@@ -340,7 +362,7 @@ export default function Index() {
       setAuthError('❌ Error al iniciar sesión.');
     }
   };
-  
+
   const handleLogout = async () => {
     Alert.alert('Cerrar sesión', '¿Estás seguro de que deseas salir?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -463,8 +485,6 @@ export default function Index() {
     return isAllowed ? 'Wi‑Fi autorizada' : 'Wi‑Fi no autorizada';
   }, [ip, ipLoading, isAllowed]);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-
   if (!isLoggedIn) {
     return (
       <SafeAreaView style={styles.loginSafe}>
@@ -517,7 +537,13 @@ export default function Index() {
               {/* Campanita de notificaciones en el Home */}
               <Pressable 
                 style={styles.bellButton} 
-                onPress={() => setShowNotificationsModal(!showNotificationsModal)}
+                onPress={() => {
+                  const willShow = !showNotificationsModal;
+                  setShowNotificationsModal(willShow);
+                  if (willShow) {
+                    marcarNotificacionesComoLeidas();
+                  }
+                }}
               >
                 <Text style={{ fontSize: 20 }}>🔔</Text>
                 {unreadCount > 0 && (
