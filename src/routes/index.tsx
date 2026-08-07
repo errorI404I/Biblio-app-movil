@@ -28,46 +28,53 @@ const CLOSE_HOUR_AR = 20;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
 });
 
 async function registerForPushNotificationsAsync(name: string) {
-  if (!name || !Device.isDevice) return;
-  
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
-
-  if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-  if (finalStatus !== 'granted') {
-    console.log('¡Permiso de notificaciones denegado!');
+  if (!name || !Device.isDevice) {
+    console.log("No es un dispositivo físico o falta el nombre.");
     return;
   }
-
-  const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+  
   try {
-    const pushTokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
     
-    await supabase
+    if (finalStatus !== 'granted') {
+      Alert.alert('Permiso requerido', 'Necesitas habilitar las notificaciones en los ajustes de tu celular para recibir avisos.');
+      return;
+    }
+
+    const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+    
+    if (!projectId) {
+      console.log('Falta configurar el projectId de EAS en el app.json');
+      return;
+    }
+
+    const pushTokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+    console.log('Token obtenido con éxito:', pushTokenData.data);
+    
+    const { error } = await supabase
       .from('user_wallet')
       .update({ expo_push_token: pushTokenData.data })
       .eq('user_name', name);
-  } catch (e) {
-    console.log('Error al obtener el push token:', e);
-  }
 
-  if (Platform.OS === 'android') {
-    Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 500, 250],
-      lightColor: '#FF231F7C',
-    });
+    if (error) {
+      console.log('Error al guardar el token en Supabase:', error.message);
+    }
+  } catch (e) {
+    console.log('Excepción al obtener el push token:', e);
   }
 }
 

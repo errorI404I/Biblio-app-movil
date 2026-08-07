@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "309581296489",
+    "project_id": "horas-biblio",
+    "storage_bucket": "horas-biblio.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:309581296489:android:f0ea965f5a0402eb74c3f8",
+        "android_client_info": {
+          "package_name": "com.nachoblu201.horasbibliomovil"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCOUgZrCFwA0Xrv2JmLWmVLoMHVRZtY41c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
