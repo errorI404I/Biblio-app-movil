@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Pressable, FlatList, ActivityIndicator, TextInput, Animated } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/integrations/supabase/client';
 import { SHOP_ITEMS } from '@/constants/shopCatalog';
@@ -41,19 +41,19 @@ export default function ShopScreen() {
   const [shopItems, setShopItems] = useState(SHOP_ITEMS);
   const [loading, setLoading] = useState(true);
 
-  // Estado para llevar el registro de qué ítems ya están activos/comprados
   const [activeItemsMap, setActiveItemsMap] = useState<{ [key: string]: boolean }>({});
 
-  // Estados para transferencia y errores visuales
   const [recipientName, setRecipientName] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [transferError, setTransferError] = useState('');
   const [transferring, setTransferring] = useState(false);
 
-  // Estado para controlar qué ítem se está comprando
+  // Estados para el autocompletado de usuarios
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
   const [purchasingId, setPurchasingId] = useState<string | null>(null);
 
-  // Estado y animaciones para el cartel emergente (Modal personalizado)
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
   const modalScale = useRef(new Animated.Value(0)).current;
@@ -114,7 +114,6 @@ export default function ShopScreen() {
       if (cth) setCoinsToHoursRate(Number(cth.value));
     }
 
-    // Cargar inventario del usuario para marcar botones como activos/comprados
     const { data: invData } = await supabase
       .from('user_inventory')
       .select('item_id, expires_at, is_active')
@@ -126,18 +125,40 @@ export default function ShopScreen() {
       const nowTime = Date.now();
       invData.forEach((inv) => {
         if (inv.expires_at) {
-          // Si tiene expiración, verificar que no haya vencido
           if (new Date(inv.expires_at).getTime() > nowTime) {
             activeMap[inv.item_id] = true;
           }
         } else {
-          // Si es permanente (eterno)
           activeMap[inv.item_id] = true;
         }
       });
     }
     setActiveItemsMap(activeMap);
     setShopItems(SHOP_ITEMS);
+  };
+
+  // Función para manejar la búsqueda de usuarios en tiempo real para el autocompletado
+  const handleSearchUsers = async (text: string) => {
+    setRecipientName(text);
+    
+    if (text.trim().length === 0) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('user_wallet')
+      .select('user_name')
+      .ilike('user_name', `%${text}%`)
+      .limit(5);
+
+    if (data && !error) {
+      // Excluir al propio usuario de las sugerencias de transferencia
+      const names = data.map(item => item.user_name).filter(n => n.toLowerCase() !== userName.toLowerCase());
+      setSuggestions(names);
+      setShowSuggestions(names.length > 0);
+    }
   };
 
   const handleConvertHoursToCoins = async () => {
@@ -295,6 +316,7 @@ export default function ShopScreen() {
       setCoins(newSenderCoins);
       setRecipientName('');
       setTransferAmount('');
+      setShowSuggestions(false);
       showSuccessModal(`¡Transferencia exitosa!\nHas enviado ${amount} monedas 🪙 a ${target}.`);
     } catch (err) {
       console.error(err);
@@ -318,7 +340,6 @@ export default function ShopScreen() {
     setPurchasingId(item.id);
 
     try {
-      // 1. Descontar monedas
       const newCoins = coins - item.price;
       const { error: walletError } = await supabase
         .from('user_wallet')
@@ -327,12 +348,10 @@ export default function ShopScreen() {
 
       if (walletError) throw walletError;
 
-      // 2. Calcular fecha de expiración si es temporal
       const expiresAt = item.type === 'temporal' 
         ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() 
         : null;
 
-      // 3. Guardar en inventario
       const { error: invError } = await supabase
         .from('user_inventory')
         .upsert({
@@ -356,7 +375,7 @@ export default function ShopScreen() {
       setPurchasingId(null);
     }
   };
-
+  
   if (loading) {
     return (
       <View style={styles.center}>
@@ -369,7 +388,7 @@ export default function ShopScreen() {
   const minsDisplay = totalMinutes % 60;
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
       <Text style={styles.title}>🛒 Tienda & Banco</Text>
       <Text style={styles.subtitle}>Usuario: {userName}</Text>
 
@@ -399,14 +418,36 @@ export default function ShopScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>🤝 Transferir Monedas</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Nombre del destinatario"
-          placeholderTextColor="#64748b"
-          value={recipientName}
-          onChangeText={setRecipientName}
-          autoCapitalize="words"
-        />
+        
+        {/* Contenedor del Input con Autocompletado */}
+        <View style={{ position: 'relative', zIndex: 50 }}>
+          <TextInput
+            style={styles.input}
+            placeholder="Nombre del destinatario"
+            placeholderTextColor="#64748b"
+            value={recipientName}
+            onChangeText={handleSearchUsers}
+            autoCapitalize="words"
+          />
+
+          {showSuggestions && (
+            <View style={styles.suggestionsContainer}>
+              {suggestions.map((item, index) => (
+                <Pressable
+                  key={index}
+                  style={styles.suggestionItem}
+                  onPress={() => {
+                    setRecipientName(item);
+                    setShowSuggestions(false);
+                  }}
+                >
+                  <Text style={{ color: '#f8fafc', fontSize: 14 }}>👤 {item}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </View>
+
         <TextInput
           style={styles.input}
           placeholder="Cantidad a enviar"
@@ -432,13 +473,14 @@ export default function ShopScreen() {
       </View>
 
       <Text style={styles.sectionTitle}>Ítems Disponibles</Text>
-      <FlatList
-        data={shopItems}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => {
+      
+      {shopItems.length === 0 ? (
+        <Text style={styles.emptyText}>No hay ítems cargados en la tienda todavía.</Text>
+      ) : (
+        shopItems.map((item) => {
           const isOwnedOrActive = activeItemsMap[item.id];
           return (
-            <View style={styles.itemCard}>
+            <View key={item.id} style={styles.itemCard}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.itemName}>{item.title}</Text>
                 <Text style={styles.itemDesc}>{item.description}</Text>
@@ -463,11 +505,9 @@ export default function ShopScreen() {
               </Pressable>
             </View>
           );
-        }}
-        ListEmptyComponent={<Text style={styles.emptyText}>No hay ítems cargados en la tienda todavía.</Text>}
-      />
+        })
+      )}
 
-      {/* CARTEL EMERGENTE (MODAL PERSONALIZADO) */}
       {modalVisible && (
         <View style={styles.modalOverlay}>
           <Animated.View 
@@ -485,12 +525,13 @@ export default function ShopScreen() {
           </Animated.View>
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#0f172a' },
+  container: { flex: 1, backgroundColor: '#0f172a' },
+  scrollContent: { padding: 20, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0f172a' },
   title: { color: '#f8fafc', fontSize: 24, fontWeight: '700', marginBottom: 4 },
   subtitle: { color: '#94a3b8', fontSize: 13, marginBottom: 15 },
@@ -504,19 +545,39 @@ const styles = StyleSheet.create({
   buyHourButton: { backgroundColor: '#059669' },
   actionButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   input: { borderWidth: 1, borderColor: '#334155', borderRadius: 10, backgroundColor: '#0f172a', color: '#f8fafc', paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginBottom: 10 },
+  
+  // Estilos de la lista desplegable de autocompletado
+  suggestionsContainer: {
+    position: 'absolute',
+    top: 48,
+    left: 0,
+    right: 0,
+    backgroundColor: '#1e293b',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+    zIndex: 100,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  suggestionItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+
   errorText: { color: '#ef4444', fontSize: 12, fontWeight: '700', marginBottom: 10, textAlign: 'center' },
-  sectionTitle: { color: '#f8fafc', fontSize: 18, fontWeight: '700', marginBottom: 10 },
+  sectionTitle: { color: '#f8fafc', fontSize: 18, fontWeight: '700', marginBottom: 10, marginTop: 5 },
   itemCard: { backgroundColor: '#111827', padding: 15, borderRadius: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, borderWidth: 1, borderColor: '#1f2937' },
   itemName: { color: '#f8fafc', fontSize: 15, fontWeight: '700' },
   itemDesc: { color: '#94a3b8', fontSize: 12, marginVertical: 4 },
   itemPrice: { color: '#fbbf24', fontSize: 13, fontWeight: '600' },
   buyButton: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, minWidth: 80, alignItems: 'center' },
   buyButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  disabledButton: { backgroundColor: '#475569', opacity: 0.8 }, // Color gris para el botón inactivo/adquirido
+  disabledButton: { backgroundColor: '#475569', opacity: 0.8 },
   emptyText: { color: '#64748b', textAlign: 'center', marginTop: 20 },
   disabled: { opacity: 0.6 },
 
-  // Estilos del Cartel Emergente (Modal)
   modalOverlay: {
     position: 'absolute',
     top: 0,

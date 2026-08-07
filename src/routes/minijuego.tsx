@@ -28,10 +28,12 @@ export default function MinijuegoScreen() {
   const [spinning, setSpinning] = useState(false);
   const [suspenseText, setSuspenseText] = useState('HAZ TU APUESTA');
   const [lastResult, setLastResult] = useState<string | null>(null);
-  const [resultType, setResultType] = useState<'win' | 'jackpot' | 'lose' | null>(null);
+  const [resultType, setResultType] = useState<'win' | 'jackpot' | 'lose' | 'plus' | 'death' | null>(null);
 
   const spinValue = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const specialGlowAnim = useRef(new Animated.Value(1)).current;
+  const currentAngleRef = useRef(0);
 
   useEffect(() => {
     const checkLocalUser = async () => {
@@ -129,30 +131,32 @@ export default function MinijuegoScreen() {
     else if (roll < 96) colorGanador = 'negro';
     else colorGanador = 'verde';
 
-    let randomExtraDeg = 0;
-    if (colorGanador === 'rojo') {
-      randomExtraDeg = Math.floor(Math.random() * 100) + 20;
-    } else if (colorGanador === 'negro') {
-      randomExtraDeg = Math.floor(Math.random() * 100) + 140;
-    } else {
-      randomExtraDeg = Math.floor(Math.random() * 20) + 265; 
-    }
+    const sectores = {
+      negro: [25, 85, 145, 205, 265, 325],
+      rojo: [55, 115, 175, 235, 295, 355],
+      verde: [0, 180]
+    };
 
-    const totalVueltas = 360 * 12; 
-    const targetAngle = totalVueltas + randomExtraDeg;
+    const posiblesAngulos = sectores[colorGanador];
+    const anguloBaseSector = posiblesAngulos[Math.floor(Math.random() * posiblesAngulos.length)];
+    const offsetAleatorio = (Math.random() - 0.5) * 6; 
 
-    spinValue.setValue(0);
+    const vueltasCompletas = 360 * 10;
+    const nextAngle = currentAngleRef.current + vueltasCompletas + (360 - (currentAngleRef.current % 360)) + anguloBaseSector + offsetAleatorio;
+    currentAngleRef.current = nextAngle;
+
     Animated.timing(spinValue, {
-      toValue: targetAngle,
-      duration: 1500,
+      toValue: nextAngle,
+      duration: 1800,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
 
     setTimeout(async () => {
       let finalCoins = newCoins;
+
       if (colorGanador === betChoice) {
-        const subRoll = Math.random() * 100;
+        const subRoll = Math.random() * 100; // 5% de probabilidad interna para eventos Plus / Legendarios
         
         if (colorGanador === 'verde') {
           if (subRoll <= 5) {
@@ -167,14 +171,33 @@ export default function MinijuegoScreen() {
             setResultType('win');
           }
         } else {
-          const premio = betAmount * 1.5;
-          finalCoins += premio;
-          setLastResult(`🟢 ¡VICTORIA! Salió ${colorGanador.toUpperCase()}. Acertaste y ganaste ${premio} monedas (x1.5).`);
-          setResultType('win');
+          // Evento especial Plus para Rojo o Negro (5% de probabilidad si acertaste)
+          if (subRoll <= 5) {
+            const premio = betAmount * 10; // x10 por el Plus
+            finalCoins += premio;
+            const nombrePlus = colorGanador === 'rojo' ? '🔴 ¡ROJO PLUS!' : '⚫ ¡NEGRO PLUS!';
+            setLastResult(`✨ ${nombrePlus} ¡Evento especial del 5% activado! Ganaste x10 = ${premio} monedas.`);
+            setResultType('plus');
+          } else {
+            const premio = betAmount * 1.5;
+            finalCoins += premio;
+            setLastResult(`🟢 ¡VICTORIA! Salió ${colorGanador.toUpperCase()}. Acertaste y ganaste ${premio} monedas (x1.5).`);
+            setResultType('win');
+          }
         }
       } else {
-        setLastResult(`🔴 Salió ${colorGanador.toUpperCase()}. La casa gana esta vez.`);
-        setResultType('lose');
+        // Si no acertaste, chequeamos el 5% de castigo especial ("Rojo de la envidia" o "Negro de muerte" que quita x2)
+        const failRoll = Math.random() * 100;
+        if (failRoll <= 5 && colorGanador !== 'verde') {
+          const penalizacion = betAmount * 2;
+          finalCoins = Math.max(0, finalCoins - penalizacion);
+          const nombreMuerte = colorGanador === 'rojo' ? '😡 ¡ROJO DE LA ENVIDIA!' : '💀 ¡NEGRO DE MUERTE!';
+          setLastResult(`${nombreMuerte} ¡Penalización crítica del 5%! Perdiste el doble (${penalizacion} monedas).`);
+          setResultType('death');
+        } else {
+          setLastResult(`🔴 Salió ${colorGanador.toUpperCase()}. La casa gana esta vez.`);
+          setResultType('lose');
+        }
       }
 
       setCoins(finalCoins);
@@ -182,9 +205,9 @@ export default function MinijuegoScreen() {
 
       setSuspenseText('¡RESULTADO DEFINIDO!');
       setSpinning(false);
-    }, 1500);
+    }, 1800);
   };
-
+  
   const spinInterpolate = spinValue.interpolate({
     inputRange: [0, 360],
     outputRange: ['0deg', '360deg'],
@@ -228,22 +251,16 @@ export default function MinijuegoScreen() {
         </Animated.View>
       </View>
 
-      {/* RULETA REAL CON IMAGEN */}
       <View style={styles.wheelContainer}>
         <View style={styles.wheelOuterRing}>
           <View style={styles.wheelPointerIndicator} />
           <Animated.View style={[styles.rouletteWheel, { transform: [{ rotate: spinInterpolate }] }]}>
             
             <Image 
-              source={require('../../assets/ruleta.jpeg')}
-              style={{ width: '100%', height: '100%' }}
-              resizeMode="cover"
+              source={require('../../assets/ruleta.png')}
+              style={{ width: '150%', height: '150%', position: 'absolute' }}
+              resizeMode="contain"
             />
-
-            <View style={styles.wheelCenterCore}>
-              <View style={styles.wheelCrossHoriz} />
-              <View style={styles.wheelCrossVert} />
-            </View>
 
           </Animated.View>
         </View>
@@ -258,6 +275,8 @@ export default function MinijuegoScreen() {
           styles.resultBox, 
           resultType === 'jackpot' && styles.resJackpot,
           resultType === 'win' && styles.resWin,
+          resultType === 'plus' && styles.resPlus,
+          resultType === 'death' && styles.resDeath,
           resultType === 'lose' && styles.resLose,
         ]}>
           <Text style={styles.resultText}>{lastResult}</Text>
@@ -330,21 +349,58 @@ const styles = StyleSheet.create({
   coinBadge: { backgroundColor: '#1e1b4b', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 24, borderWidth: 2, borderColor: '#f59e0b', shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
   coinText: { color: '#fbbf24', fontWeight: '900', fontSize: 16 },
   
-  wheelContainer: { alignItems: 'center', justifyContent: 'center', marginVertical: 14 },
-  wheelOuterRing: { width: 190, height: 190, borderRadius: 95, backgroundColor: '#78350f', borderWidth: 6, borderColor: '#b45309', alignItems: 'center', justifyContent: 'center', shadowColor: '#b45309', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 12 },
-  wheelPointerIndicator: { position: 'absolute', top: -4, width: 0, height: 0, backgroundColor: 'transparent', borderStyle: 'solid', borderLeftWidth: 8, borderRightWidth: 8, borderBottomWidth: 16, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#ef4444', zIndex: 30 },
-  rouletteWheel: { width: 170, height: 170, borderRadius: 85, borderWidth: 2, borderColor: '#fbbf24', backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-
-  wheelCenterCore: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#92400e', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fbbf24', position: 'absolute', zIndex: 15 },
-  wheelCrossHoriz: { position: 'absolute', width: '100%', height: 3, backgroundColor: '#fbbf24' },
-  wheelCrossVert: { position: 'absolute', width: 3, height: '100%', backgroundColor: '#fbbf24' },
+  wheelContainer: { alignItems: 'center', justifyContent: 'center', marginVertical: 18 },
+  wheelOuterRing: { 
+    width: 280, 
+    height: 280, 
+    borderRadius: 140, 
+    backgroundColor: '#78350f', 
+    borderWidth: 8, 
+    borderColor: '#b45309', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    shadowColor: '#b45309', 
+    shadowOffset: { width: 0, height: 0 }, 
+    shadowOpacity: 0.9, 
+    shadowRadius: 18 
+  },
+  wheelPointerIndicator: { 
+    position: 'absolute', 
+    top: -6, 
+    width: 0, 
+    height: 0, 
+    backgroundColor: 'transparent', 
+    borderStyle: 'solid', 
+    borderLeftWidth: 12, 
+    borderRightWidth: 12, 
+    borderBottomWidth: 22, 
+    borderLeftColor: 'transparent', 
+    borderRightColor: 'transparent', 
+    borderBottomColor: '#ef4444', 
+    zIndex: 30 
+  },
+  rouletteWheel: { 
+    width: 252, 
+    height: 252, 
+    borderRadius: 126, 
+    borderWidth: 3, 
+    borderColor: '#fbbf24', 
+    backgroundColor: '#0f172a', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    overflow: 'hidden' 
+  },
 
   suspenseBox: { alignItems: 'center', marginVertical: 10 },
   suspenseTextHeader: { color: '#38bdf8', fontSize: 14, fontWeight: '800', letterSpacing: 1.5, textTransform: 'uppercase' },
+  
   resultBox: { padding: 16, borderRadius: 14, marginBottom: 20, borderWidth: 2, alignItems: 'center', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   resJackpot: { backgroundColor: '#451a03', borderColor: '#f59e0b', shadowColor: '#f59e0b' },
   resWin: { backgroundColor: '#064e3b', borderColor: '#10b981', shadowColor: '#10b981' },
+  resPlus: { backgroundColor: '#701a75', borderColor: '#e879f9', shadowColor: '#e879f9', shadowOpacity: 0.9, shadowRadius: 12 }, // Estilo muy llamativo para Rojo/Negro Plus
+  resDeath: { backgroundColor: '#581c87', borderColor: '#a855f7', shadowColor: '#a855f7', shadowOpacity: 0.9, shadowRadius: 12 }, // Estilo crítico para Rojo envidia / Negro muerte
   resLose: { backgroundColor: '#7f1d1d', borderColor: '#ef4444', shadowColor: '#ef4444' },
+  
   resultText: { color: '#f8fafc', textAlign: 'center', fontWeight: '800', fontSize: 15 },
   card: { backgroundColor: '#111827', borderRadius: 20, padding: 20, borderWidth: 1, borderColor: '#1f2937', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 10 },
   sectionTitle: { color: '#f8fafc', fontSize: 22, fontWeight: '900', marginBottom: 4 },
