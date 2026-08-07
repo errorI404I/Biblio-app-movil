@@ -189,7 +189,7 @@ export default function Index() {
 
   // Estados para el Screamer
   const [screamerActive, setScreamerActive] = useState(false);
-  const [screamerData, setScreamerData] = useState<{ image: string; isSurprise: boolean } | null>(null);
+  const [screamerData, setScreamerData] = useState<{ image: any; isSurprise: boolean } | null>(null);
 
   const { data: leaders, loading: leadersLoading, error: leadersError, refetch: refetchLeaders } =
     useLeaderboard({ limit: 50 });
@@ -708,7 +708,7 @@ export default function Index() {
       {screamerActive && screamerData && (
         <View style={styles.screamerOverlay}>
           <Image 
-            source={{ uri: screamerData.image }} 
+            source={screamerData.image} 
             style={styles.screamerImage} 
             resizeMode="cover"
           />
@@ -723,7 +723,7 @@ export default function Index() {
           </Pressable>
         </View>
       )}
-
+      
       <View style={styles.floatingContainer}>
         {showMenu && (
           <View style={styles.floatingMenu}>
