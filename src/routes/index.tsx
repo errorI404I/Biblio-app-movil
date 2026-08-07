@@ -316,8 +316,9 @@ export default function Index() {
           await AsyncStorage.setItem(STORAGE_KEY, name);
           setAuthUserName(name);
           setIsLoggedIn(true);
-          await registerForPushNotificationsAsync(name);
           await fetchUserStreak(name);
+          // 👈 Asegurar registro del token aquí
+          await registerForPushNotificationsAsync(name);
         } else {
           setAuthError('❌ Contraseña incorrecta.');
         }
@@ -330,15 +331,16 @@ export default function Index() {
         await AsyncStorage.setItem(STORAGE_KEY, name);
         setAuthUserName(name);
         setIsLoggedIn(true);
-        await registerForPushNotificationsAsync(name);
         await fetchUserStreak(name);
+        // 👈 Asegurar registro del token aquí también para nuevos
+        await registerForPushNotificationsAsync(name);
       }
     } catch (err) {
       console.error(err);
       setAuthError('❌ Error al iniciar sesión.');
     }
   };
-
+  
   const handleLogout = async () => {
     Alert.alert('Cerrar sesión', '¿Estás seguro de que deseas salir?', [
       { text: 'Cancelar', style: 'cancel' },
