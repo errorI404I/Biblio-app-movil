@@ -10,6 +10,7 @@ import {
   TextInput,
   Animated,
   Easing,
+  Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/integrations/supabase/client';
@@ -54,7 +55,7 @@ export default function MinijuegoScreen() {
   }, [pulseAnim]);
 
   const fetchUserWallet = async (name: string) => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('user_wallet')
       .select('coins')
       .eq('user_name', name)
@@ -124,7 +125,6 @@ export default function MinijuegoScreen() {
     const roll = Math.random() * 100;
     let colorGanador: 'rojo' | 'negro' | 'verde' = 'rojo';
 
-    // Probabilidades: 48% rojo, 48% negro, 2% verde
     if (roll < 48) colorGanador = 'rojo';
     else if (roll < 96) colorGanador = 'negro';
     else colorGanador = 'verde';
@@ -135,7 +135,7 @@ export default function MinijuegoScreen() {
     } else if (colorGanador === 'negro') {
       randomExtraDeg = Math.floor(Math.random() * 100) + 140;
     } else {
-      randomExtraDeg = Math.floor(Math.random() * 20) + 265; // Posición superior (Verde)
+      randomExtraDeg = Math.floor(Math.random() * 20) + 265; 
     }
 
     const totalVueltas = 360 * 12; 
@@ -155,7 +155,6 @@ export default function MinijuegoScreen() {
         const subRoll = Math.random() * 100;
         
         if (colorGanador === 'verde') {
-          // Segunda tirada interna del 5% para el x50 Plus
           if (subRoll <= 5) {
             const premio = betAmount * 50;
             finalCoins += premio;
@@ -168,7 +167,6 @@ export default function MinijuegoScreen() {
             setResultType('win');
           }
         } else {
-          // Apuesta a Rojo o Negro (x1.5)
           const premio = betAmount * 1.5;
           finalCoins += premio;
           setLastResult(`🟢 ¡VICTORIA! Salió ${colorGanador.toUpperCase()}. Acertaste y ganaste ${premio} monedas (x1.5).`);
@@ -230,21 +228,23 @@ export default function MinijuegoScreen() {
         </Animated.View>
       </View>
 
-      {/* RULETA ESTILO CASINO REAL */}
+      {/* RULETA REAL CON IMAGEN */}
       <View style={styles.wheelContainer}>
         <View style={styles.wheelOuterRing}>
           <View style={styles.wheelPointerIndicator} />
           <Animated.View style={[styles.rouletteWheel, { transform: [{ rotate: spinInterpolate }] }]}>
-            <View style={styles.wheelSectionGreenTop} />
-            <View style={styles.wheelSectionRed} />
-            <View style={styles.wheelSectionBlack} />
+            
+            <Image 
+              source={require('../../assets/ruleta.jpeg')}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode="cover"
+            />
+
             <View style={styles.wheelCenterCore}>
               <View style={styles.wheelCrossHoriz} />
               <View style={styles.wheelCrossVert} />
-              <View style={styles.wheelInnerKnob}>
-                <Text style={styles.wheelCenterEmoji}>💎</Text>
-              </View>
             </View>
+
           </Animated.View>
         </View>
       </View>
@@ -275,7 +275,6 @@ export default function MinijuegoScreen() {
             <Text style={styles.choiceText}>ROJO (x1.5)</Text>
           </Pressable>
 
-          {/* VERDE EN EL MEDIO */}
           <Pressable 
             style={[styles.choiceBtn, betChoice === 'verde' && styles.verdeActive]} 
             onPress={() => setBetChoice('verde')}
@@ -331,19 +330,14 @@ const styles = StyleSheet.create({
   coinBadge: { backgroundColor: '#1e1b4b', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 24, borderWidth: 2, borderColor: '#f59e0b', shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
   coinText: { color: '#fbbf24', fontWeight: '900', fontSize: 16 },
   
-  // Estilos avanzados para simular la ruleta de casino real
   wheelContainer: { alignItems: 'center', justifyContent: 'center', marginVertical: 14 },
   wheelOuterRing: { width: 190, height: 190, borderRadius: 95, backgroundColor: '#78350f', borderWidth: 6, borderColor: '#b45309', alignItems: 'center', justifyContent: 'center', shadowColor: '#b45309', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 12 },
   wheelPointerIndicator: { position: 'absolute', top: -4, width: 0, height: 0, backgroundColor: 'transparent', borderStyle: 'solid', borderLeftWidth: 8, borderRightWidth: 8, borderBottomWidth: 16, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#ef4444', zIndex: 30 },
-  rouletteWheel: { width: 170, height: 170, borderRadius: 85, borderWidth: 4, borderColor: '#fbbf24', backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  wheelSectionRed: { position: 'absolute', width: '50%', height: '100%', backgroundColor: '#991b1b', left: 0 },
-  wheelSectionBlack: { position: 'absolute', width: '50%', height: '100%', backgroundColor: '#0f172a', right: 0 },
-  wheelSectionGreenTop: { position: 'absolute', width: 22, height: '100%', backgroundColor: '#059669', top: 0, zIndex: 5, borderRadius: 4 },
-  wheelCenterCore: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#92400e', alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fbbf24', position: 'absolute', zIndex: 15 },
-  wheelCrossHoriz: { position: 'absolute', width: '100%', height: 4, backgroundColor: '#fbbf24' },
-  wheelCrossVert: { position: 'absolute', width: 4, height: '100%', backgroundColor: '#fbbf24' },
-  wheelInnerKnob: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#b45309', alignItems: 'center', justifyContent: 'center', zIndex: 20, borderWidth: 2, borderColor: '#fde047' },
-  wheelCenterEmoji: { fontSize: 16 },
+  rouletteWheel: { width: 170, height: 170, borderRadius: 85, borderWidth: 2, borderColor: '#fbbf24', backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+
+  wheelCenterCore: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#92400e', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fbbf24', position: 'absolute', zIndex: 15 },
+  wheelCrossHoriz: { position: 'absolute', width: '100%', height: 3, backgroundColor: '#fbbf24' },
+  wheelCrossVert: { position: 'absolute', width: 3, height: '100%', backgroundColor: '#fbbf24' },
 
   suspenseBox: { alignItems: 'center', marginVertical: 10 },
   suspenseTextHeader: { color: '#38bdf8', fontSize: 14, fontWeight: '800', letterSpacing: 1.5, textTransform: 'uppercase' },

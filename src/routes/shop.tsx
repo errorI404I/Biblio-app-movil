@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, FlatList, Alert, ActivityIndicator, TextInput } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, Pressable, FlatList, ActivityIndicator, TextInput, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/integrations/supabase/client';
+import { SHOP_ITEMS } from '@/constants/shopCatalog';
 
 const STORAGE_KEY = 'horasbiblio_user_name';
 
-// Función auxiliar para disparar la notificación Push de Expo
 async function sendPushNotification(expoPushToken: string, title: string, body: string) {
   if (!expoPushToken) return;
 
@@ -38,7 +38,7 @@ export default function ShopScreen() {
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [hoursToCoinsRate, setHoursToCoinsRate] = useState(10);
   const [coinsToHoursRate, setCoinsToHoursRate] = useState(15);
-  const [shopItems, setShopItems] = useState<any[]>([]);
+  const [shopItems, setShopItems] = useState(SHOP_ITEMS);
   const [loading, setLoading] = useState(true);
 
   // Estados para transferencia y errores visuales
@@ -46,6 +46,31 @@ export default function ShopScreen() {
   const [transferAmount, setTransferAmount] = useState('');
   const [transferError, setTransferError] = useState('');
   const [transferring, setTransferring] = useState(false);
+
+  // Estado para controlar qué ítem se está comprando
+  const [purchasingId, setPurchasingId] = useState<string | null>(null);
+
+  // Estado y animaciones para el cartel emergente (Modal personalizado)
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalMessage, setModalMessage] = useState('');
+  const modalScale = useRef(new Animated.Value(0)).current;
+  const modalOpacity = useRef(new Animated.Value(0)).current;
+
+  const showSuccessModal = (message: string) => {
+    setModalMessage(message);
+    setModalVisible(true);
+    Animated.parallel([
+      Animated.spring(modalScale, { toValue: 1, friction: 5, useNativeDriver: true }),
+      Animated.timing(modalOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const hideSuccessModal = () => {
+    Animated.timing(modalOpacity, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+      setModalVisible(false);
+      modalScale.setValue(0);
+    });
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -86,14 +111,13 @@ export default function ShopScreen() {
       if (cth) setCoinsToHoursRate(Number(cth.value));
     }
 
-    const { data: items } = await supabase.from('shop_items').select('*');
-    if (items) setShopItems(items);
+    setShopItems(SHOP_ITEMS);
   };
 
   const handleConvertHoursToCoins = async () => {
     const minutesNeeded = 60;
     if (totalMinutes < minutesNeeded) {
-      Alert.alert('Saldo insuficiente', 'Necesitas al menos 1 hora de estudio acumulada (60 min) para convertir.');
+      showSuccessModal('⚠️ Necesitas al menos 1 hora de estudio acumulada (60 min) para convertir.');
       return;
     }
 
@@ -132,16 +156,16 @@ export default function ShopScreen() {
 
       setCoins(newCoins);
       setTotalMinutes(prev => prev - 60);
-      Alert.alert('¡Intercambio exitoso!', `Convertiste 1 hora de estudio por ${hoursToCoinsRate} monedas 🪙.`);
+      showSuccessModal(`¡Intercambio exitoso!\nConvertiste 1 hora por ${hoursToCoinsRate} monedas 🪙.`);
     } catch (err) {
       console.error(err);
-      Alert.alert('Error', 'No se pudo procesar el intercambio.');
+      showSuccessModal('❌ No se pudo procesar el intercambio.');
     }
   };
 
   const handleConvertCoinsToHours = async () => {
     if (coins < coinsToHoursRate) {
-      Alert.alert('Monedas insuficientes', `Necesitas ${coinsToHoursRate} monedas para comprar 1 hora.`);
+      showSuccessModal(`⚠️ Necesitas ${coinsToHoursRate} monedas para comprar 1 hora.`);
       return;
     }
 
@@ -170,14 +194,13 @@ export default function ShopScreen() {
 
       setCoins(newCoins);
       setTotalMinutes(prev => prev + 60);
-      Alert.alert('¡Compra exitosa!', `Canjeaste ${coinsToHoursRate} monedas por 1 hora (+60 min) sumada a tu perfil.`);
+      showSuccessModal(`¡Compra exitosa!\nCanjeaste ${coinsToHoursRate} monedas por 1 hora (+60 min).`);
     } catch (err) {
       console.error(err);
-      Alert.alert('Error', 'No se pudo completar la compra de horas.');
+      showSuccessModal('❌ No se pudo completar la compra de horas.');
     }
   };
 
-  // Transferencia con validación, notificación interna (campanita) y push de Expo
   const handleTransferCoins = async () => {
     const target = recipientName.trim();
     const amount = parseFloat(transferAmount);
@@ -200,7 +223,6 @@ export default function ShopScreen() {
 
     setTransferring(true);
     try {
-      // 1. Verificar destinatario en user_wallet
       const { data: recipientWallet, error: recipErr } = await supabase
         .from('user_wallet')
         .select('*')
@@ -213,7 +235,6 @@ export default function ShopScreen() {
         return;
       }
 
-      // 2. Actualizar saldos
       const newSenderCoins = coins - amount;
       const newRecipientCoins = (recipientWallet.coins || 0) + amount;
 
@@ -231,40 +252,24 @@ export default function ShopScreen() {
 
       if (recipUpdateErr) throw recipUpdateErr;
 
-      // 3. Insertar notificación interna (Campanita)
       const { error: notifErr } = await supabase.from('notifications').insert({
         user_name: target,
         message: `🪙 ¡${userName} te ha enviado ${amount} monedas!`,
       });
       if (notifErr) console.log('Error creando notificación interna:', notifErr);
 
-      // 4. Buscar token push del destinatario en sesiones activas
-      const { data: targetSession } = await supabase
-        .from('sesiones')
-        .select('expo_push_token')
-        .eq('user_name', target)
-        .not('expo_push_token', 'is', null)
-        .limit(1)
-        .maybeSingle();
-
-      // 5. Enviar notificación push real de Expo si tiene un token válido
-      if (targetSession?.expo_push_token) {
+      if (recipientWallet?.expo_push_token) {
         await sendPushNotification(
-          targetSession.expo_push_token,
+          recipientWallet.expo_push_token,
           '¡Nueva transferencia! 🪙',
           `${userName} te ha enviado ${amount} monedas.`
         );
       }
-      const { data: targetUser } = await supabase
-  .from('user_wallet')
-  .select('expo_push_token')
-  .eq('user_name', target)
-  .maybeSingle();
 
       setCoins(newSenderCoins);
       setRecipientName('');
       setTransferAmount('');
-      Alert.alert('¡Transferencia exitosa!', `Has enviado ${amount} monedas 🪙 a ${target}.`);
+      showSuccessModal(`¡Transferencia exitosa!\nHas enviado ${amount} monedas 🪙 a ${target}.`);
     } catch (err) {
       console.error(err);
       setTransferError('❌ Error de red. Transacción cancelada.');
@@ -272,14 +277,76 @@ export default function ShopScreen() {
       setTransferring(false);
     }
   };
+const handleBuyItem = async (item: any) => {
+  if (coins < item.price) {
+    showSuccessModal('⚠️ Monedas insuficientes.');
+    return;
+  }
 
-  const handleBuyItem = (item: any) => {
-    if (coins < item.price) {
-      Alert.alert('Monedas insuficientes', 'No tienes suficientes monedas para comprar este ítem.');
+  setPurchasingId(item.id);
+
+  try {
+    // 1. Verificar si ya tiene el ítem y si está activo
+    const { data: existingItem } = await supabase
+      .from('user_inventory')
+      .select('*')
+      .eq('user_name', userName)
+      .eq('item_id', item.id)
+      .maybeSingle();
+
+    // Si es un ítem eterno y ya lo tiene, no dejar comprar
+    if (existingItem && item.type === 'eterno') {
+      showSuccessModal('⚠️ Ya posees este ítem permanente.');
+      setPurchasingId(null);
       return;
     }
-    Alert.alert('Próximamente', `Estás a punto de adquirir: ${item.title}. Sistema de inventario en desarrollo.`);
-  };
+
+    // Si es temporal, verificar si sigue activo (fecha de expiración mayor a ahora)
+    if (existingItem && item.type === 'temporal') {
+      const now = new Date();
+      if (new Date(existingItem.expires_at) > now) {
+        showSuccessModal('⚠️ Ya tienes este ítem activo. ¡Espera a que expire!');
+        setPurchasingId(null);
+        return;
+      }
+    }
+
+    // 2. Proceder con la compra
+    const newCoins = coins - item.price;
+    const { error: walletError } = await supabase
+      .from('user_wallet')
+      .update({ coins: newCoins })
+      .eq('user_name', userName);
+
+    if (walletError) throw walletError;
+
+    // 3. Upsert en el inventario
+    const expiresAt = item.type === 'temporal' 
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() 
+      : null;
+
+    const { error: invError } = await supabase
+      .from('user_inventory')
+      .upsert({
+        user_name: userName,
+        item_id: item.id,
+        is_active: true,
+        expires_at: expiresAt,
+        type: item.type
+      }, { onConflict: 'user_name, item_id' }); // Asegúrate de tener un índice de unicidad aquí
+
+    if (invError) throw invError;
+
+    setCoins(newCoins);
+    showSuccessModal(`¡Compra exitosa: ${item.title}!`);
+
+  } catch (err) {
+    console.error(err);
+    showSuccessModal('❌ Error al procesar la compra.');
+  } finally {
+    setPurchasingId(null);
+  }
+};
 
   if (loading) {
     return (
@@ -289,6 +356,19 @@ export default function ShopScreen() {
     );
   }
 
+  const checkActiveMultipliers = async (name: string) => {
+  const now = new Date().toISOString();
+  
+  // Buscar ítems temporales activos que no hayan expirado
+  const { data: activeItems } = await supabase
+    .from('user_inventory')
+    .select('*')
+    .eq('user_name', name)
+    .eq('is_active', true)
+    .gt('expires_at', now); // Esto filtra automáticamente los que ya vencieron
+    
+  return activeItems;
+};
   const hoursDisplay = Math.floor(totalMinutes / 60);
   const minsDisplay = totalMinutes % 60;
 
@@ -340,7 +420,6 @@ export default function ShopScreen() {
           onChangeText={setTransferAmount}
         />
 
-        {/* MENSAJE VISUAL DE ERROR EN LA TRANSFERENCIA */}
         {transferError ? <Text style={styles.errorText}>{transferError}</Text> : null}
 
         <Pressable 
@@ -367,13 +446,40 @@ export default function ShopScreen() {
               <Text style={styles.itemDesc}>{item.description}</Text>
               <Text style={styles.itemPrice}>🪙 {item.price} Monedas</Text>
             </View>
-            <Pressable style={styles.buyButton} onPress={() => handleBuyItem(item)}>
-              <Text style={styles.buyButtonText}>Comprar</Text>
+            <Pressable 
+              style={[styles.buyButton, purchasingId === item.id && { backgroundColor: '#065f46' }]} 
+              onPress={() => handleBuyItem(item)}
+              disabled={purchasingId !== null}
+            >
+              {purchasingId === item.id ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.buyButtonText}>Comprar</Text>
+              )}
             </Pressable>
           </View>
         )}
         ListEmptyComponent={<Text style={styles.emptyText}>No hay ítems cargados en la tienda todavía.</Text>}
       />
+
+      {/* CARTEL EMERGENTE (MODAL PERSONALIZADO) */}
+      {modalVisible && (
+        <View style={styles.modalOverlay}>
+          <Animated.View 
+            style={[
+              styles.modalContainer, 
+              { transform: [{ scale: modalScale }], opacity: modalOpacity }
+            ]}
+          >
+            <Text style={styles.modalTitle}>✨ Notificación</Text>
+            <Text style={styles.modalText}>{modalMessage}</Text>
+            
+            <Pressable style={styles.modalButton} onPress={hideSuccessModal}>
+              <Text style={styles.modalButtonText}>¡Entendido!</Text>
+            </Pressable>
+          </Animated.View>
+        </View>
+      )}
     </View>
   );
 }
@@ -399,8 +505,61 @@ const styles = StyleSheet.create({
   itemName: { color: '#f8fafc', fontSize: 15, fontWeight: '700' },
   itemDesc: { color: '#94a3b8', fontSize: 12, marginVertical: 4 },
   itemPrice: { color: '#fbbf24', fontSize: 13, fontWeight: '600' },
-  buyButton: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
+  buyButton: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, minWidth: 80, alignItems: 'center' },
   buyButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   emptyText: { color: '#64748b', textAlign: 'center', marginTop: 20 },
   disabled: { opacity: 0.6 },
+
+  // Estilos del Cartel Emergente (Modal)
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+    padding: 20,
+  },
+  modalContainer: {
+    width: '85%',
+    backgroundColor: '#1e293b',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#f59e0b',
+    shadowColor: '#f59e0b',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 15,
+  },
+  modalTitle: {
+    color: '#fbbf24',
+    fontSize: 20,
+    fontWeight: '900',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  modalText: {
+    color: '#f8fafc',
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 22,
+  },
+  modalButton: {
+    backgroundColor: '#f59e0b',
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#0f172a',
+    fontWeight: '900',
+    fontSize: 15,
+  },
 });

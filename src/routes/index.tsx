@@ -33,7 +33,6 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Función para registrar y actualizar el token push en user_wallet
 async function registerForPushNotificationsAsync(name: string) {
   if (!Device.isDevice) return;
   
@@ -50,7 +49,6 @@ async function registerForPushNotificationsAsync(name: string) {
   try {
     const pushTokenData = await Notifications.getExpoPushTokenAsync({ projectId });
     
-    // Guardar token en user_wallet para que siempre esté disponible sin importar la solapa
     await supabase
       .from('user_wallet')
       .update({ expo_push_token: pushTokenData.data })
@@ -64,7 +62,7 @@ type SessionRow = {
   id: string;
   user_name: string;
   start_time?: string | null;
-  star_time?: string | null;
+  start_time?: string | null;
   end_time: string | null;
   total_minutes: number | null;
   last_seen?: string | null;
@@ -93,6 +91,9 @@ export default function Index() {
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
 
+  // Estado para la racha de estudio
+  const [userStreak, setUserStreak] = useState(0);
+
   // Estados del menú flotante inferior derecho
   const [showMenu, setShowMenu] = useState(false);
 
@@ -106,8 +107,35 @@ export default function Index() {
   const isAllowed = ip === ALLOWED_IP;
   const systemOpen = isWithinOpenHours(new Date(now));
   const elapsed = activeSession
-    ? now - new Date(activeSession.start_time ?? activeSession.star_time ?? new Date().toISOString()).getTime()
+    ? now - new Date(activeSession.start_time ?? activeSession.start_time ?? new Date().toISOString()).getTime()
     : 0;
+
+  // Cargar notificaciones iniciales con useCallback
+  const fetchNotifications = useCallback(async (name: string) => {
+    if (!name) return;
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_name', name)
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    if (!error && data) setNotifications(data);
+  }, []);
+
+  // Función para calcular y actualizar la racha del usuario
+  const fetchUserStreak = useCallback(async (name: string) => {
+    if (!name) return;
+    const { data, error } = await supabase
+      .from('sesiones')
+      .select('start_time, start_time')
+      .eq('user_name', name);
+
+    if (!error && data) {
+      const streak = calculateStreak(data);
+      setUserStreak(streak);
+    }
+  }, []);
 
   // Restaurar sesión guardada localmente al abrir la app y registrar token push
   useEffect(() => {
@@ -117,10 +145,38 @@ export default function Index() {
         setAuthUserName(saved);
         setIsLoggedIn(true);
         await registerForPushNotificationsAsync(saved);
+        await fetchUserStreak(saved);
       }
     };
     restoreSession();
-  }, []);
+  }, [fetchUserStreak]);
+
+  // Escuchar notificaciones en tiempo real con Supabase Realtime
+  useEffect(() => {
+    if (!authUserName) return;
+    fetchNotifications(authUserName);
+    fetchUserStreak(authUserName);
+
+    const channel = supabase
+      .channel('public:notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_name=eq.${authUserName}`,
+        },
+        (payload) => {
+          setNotifications((prev) => [payload.new as NotificationRow, ...prev].slice(0, 10));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [authUserName, fetchNotifications, fetchUserStreak]);
 
   const handleLogin = async () => {
     const name = authUserName.trim();
@@ -147,6 +203,7 @@ export default function Index() {
           setAuthUserName(name);
           setIsLoggedIn(true);
           await registerForPushNotificationsAsync(name);
+          await fetchUserStreak(name);
         } else {
           setAuthError('❌ Contraseña incorrecta.');
         }
@@ -160,6 +217,7 @@ export default function Index() {
         setAuthUserName(name);
         setIsLoggedIn(true);
         await registerForPushNotificationsAsync(name);
+        await fetchUserStreak(name);
       }
     } catch (err) {
       console.error(err);
@@ -182,38 +240,6 @@ export default function Index() {
       },
     ]);
   };
-
-  const fetchNotifications = useCallback(async (name: string) => {
-    if (!name) return;
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_name', name)
-      .order('created_at', { ascending: false })
-      .limit(10);
-
-    if (!error && data) setNotifications(data);
-  }, []);
-
-  useEffect(() => {
-    if (!authUserName) return;
-    fetchNotifications(authUserName);
-
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_name=eq.${authUserName}` },
-        (payload) => {
-          setNotifications((prev) => [payload.new as NotificationRow, ...prev].slice(0, 10));
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [authUserName, fetchNotifications]);
 
   useEffect(() => {
     fetchPublicIp().then((value) => {
@@ -273,6 +299,7 @@ export default function Index() {
       if (error || !data) throw error ?? new Error('No se pudo crear la sesión');
 
       setActiveSession(data as SessionRow);
+      await fetchUserStreak(authUserName);
       Alert.alert('Check-in registrado', `${authUserName} ya quedó activo.`);
     } catch (error) {
       console.error(error);
@@ -290,7 +317,7 @@ export default function Index() {
       setIp(currentIp);
 
       const endIso = new Date().toISOString();
-      const startTime = new Date(activeSession.start_time ?? activeSession.star_time ?? endIso).getTime();
+      const startTime = new Date(activeSession.start_time ?? activeSession.start_time ?? endIso).getTime();
       const { error } = await supabase
         .from('sesiones')
         .update({
@@ -303,6 +330,7 @@ export default function Index() {
       if (error) throw error;
 
       setActiveSession(null);
+      await fetchUserStreak(authUserName);
       await refetchLeaders();
       Alert.alert('Check-out', 'Tu sesión quedó cerrada.');
     } catch (error) {
@@ -434,6 +462,20 @@ export default function Index() {
                 </View>
               )}
             </View>
+            
+            <View style={styles.card}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.label}>Racha de Estudio</Text>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#f59e0b' }}>
+                  🔥 {userStreak} {userStreak === 1 ? 'Día' : 'Días'}
+                </Text>
+              </View>
+              <Text style={styles.meta}>
+                {userStreak > 0 
+                  ? '¡Excelente constancia! Mantén el ritmo diario.' 
+                  : 'Haz un check-in hoy para iniciar tu racha.'}
+              </Text>
+            </View> 
 
             <View style={styles.card}>
               <Text style={styles.label}>Ranking</Text>
@@ -526,45 +568,6 @@ function getArgHour(d: Date = new Date()) {
   return (d.getUTCHours() + 24 - 3) % 24;
 }
 
-// Cargar notificaciones iniciales
-  const fetchNotifications = useCallback(async (name: string) => {
-    if (!name) return;
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_name', name)
-      .order('created_at', { ascending: false })
-      .limit(10);
-
-    if (!error && data) setNotifications(data);
-  }, []);
-
-  // Escuchar notificaciones en tiempo real con Supabase Realtime
-  useEffect(() => {
-    if (!authUserName) return;
-    fetchNotifications(authUserName);
-
-    const channel = supabase
-      .channel('public:notifications')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_name=eq.${authUserName}`,
-        },
-        (payload) => {
-          setNotifications((prev) => [payload.new as NotificationRow, ...prev].slice(0, 10));
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [authUserName, fetchNotifications]);
-
 function isWithinOpenHours(d: Date = new Date()) {
   const h = getArgHour(d);
   return h >= OPEN_HOUR_AR && h < CLOSE_HOUR_AR;
@@ -578,6 +581,48 @@ async function fetchPublicIp(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function calculateStreak(sessions: { start_time?: string | null; start_time?: string | null }[]): number {
+  if (!sessions || sessions.length === 0) return 0;
+
+  const uniqueDates = Array.from(
+    new Set(
+      sessions.map((s) => {
+        const rawDate = s.start_time ?? s.start_time;
+        if (!rawDate) return null;
+        return new Date(rawDate).toISOString().split('T')[0];
+      }).filter(Boolean)
+    )
+  ).sort((a, b) => (b! > a! ? 1 : -1)) as string[];
+
+  if (uniqueDates.length === 0) return 0;
+
+  let streak = 0;
+  const today = new Date().toISOString().split('T')[0];
+  
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = yesterdayDate.toISOString().split('T')[0];
+
+  const latestDate = uniqueDates[0];
+  if (latestDate !== today && latestDate !== yesterday) {
+    return 0;
+  }
+
+  let expectedDate = new Date(latestDate);
+  
+  for (let i = 0; i < uniqueDates.length; i++) {
+    const expectedStr = expectedDate.toISOString().split('T')[0];
+    if (uniqueDates[i] === expectedStr) {
+      streak++;
+      expectedDate.setDate(expectedDate.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+
+  return streak;
 }
 
 function formatDuration(ms: number) {
