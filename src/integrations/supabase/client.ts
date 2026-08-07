@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type SessionRow = {
   id: string;
   user_name: string;
-  star_time?: string | null;
+  start_time: string | null;
   end_time?: string | null;
   total_minutes?: number | null;
   created_at?: string | null;

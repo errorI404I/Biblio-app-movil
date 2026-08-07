@@ -8,6 +8,7 @@ import Constants from 'expo-constants';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -34,7 +35,7 @@ Notifications.setNotificationHandler({
 });
 
 async function registerForPushNotificationsAsync(name: string) {
-  if (!Device.isDevice) return;
+  if (!name || !Device.isDevice) return;
   
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
@@ -43,7 +44,10 @@ async function registerForPushNotificationsAsync(name: string) {
     const { status } = await Notifications.requestPermissionsAsync();
     finalStatus = status;
   }
-  if (finalStatus !== 'granted') return;
+  if (finalStatus !== 'granted') {
+    console.log('¡Permiso de notificaciones denegado!');
+    return;
+  }
 
   const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
   try {
@@ -56,12 +60,20 @@ async function registerForPushNotificationsAsync(name: string) {
   } catch (e) {
     console.log('Error al obtener el push token:', e);
   }
+
+  if (Platform.OS === 'android') {
+    Notifications.setNotificationChannelAsync('default', {
+      name: 'default',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 500, 250],
+      lightColor: '#FF231F7C',
+    });
+  }
 }
 
 type SessionRow = {
   id: string;
   user_name: string;
-  start_time?: string | null;
   start_time?: string | null;
   end_time: string | null;
   total_minutes: number | null;
@@ -77,6 +89,75 @@ type NotificationRow = {
   created_at: string;
   read: boolean;
 };
+
+function getArgHour(d: Date = new Date()) {
+  return (d.getUTCHours() + 24 - 3) % 24;
+}
+
+function isWithinOpenHours(d: Date = new Date()) {
+  const h = getArgHour(d);
+  return h >= OPEN_HOUR_AR && h < CLOSE_HOUR_AR;
+}
+
+async function fetchPublicIp(): Promise<string | null> {
+  try {
+    const response = await fetch('https://api.ipify.org?format=json');
+    const data = await response.json();
+    return data?.ip ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function calculateStreak(sessions: { start_time?: string | null }[]): number {
+  if (!sessions || sessions.length === 0) return 0;
+
+  const uniqueDates = Array.from(
+    new Set(
+      sessions.map((s) => {
+        const rawDate = s.start_time;
+        if (!rawDate) return null;
+        return new Date(rawDate).toISOString().split('T')[0];
+      }).filter(Boolean)
+    )
+  ).sort((a, b) => (b! > a! ? 1 : -1)) as string[];
+
+  if (uniqueDates.length === 0) return 0;
+
+  let streak = 0;
+  const today = new Date().toISOString().split('T')[0];
+  
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = yesterdayDate.toISOString().split('T')[0];
+
+  const latestDate = uniqueDates[0];
+  if (latestDate !== today && latestDate !== yesterday) {
+    return 0;
+  }
+
+  let expectedDate = new Date(latestDate);
+  
+  for (let i = 0; i < uniqueDates.length; i++) {
+    const expectedStr = expectedDate.toISOString().split('T')[0];
+    if (uniqueDates[i] === expectedStr) {
+      streak++;
+      expectedDate.setDate(expectedDate.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+
+  return streak;
+}
+
+function formatDuration(ms: number) {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
 
 export default function Index() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -107,10 +188,9 @@ export default function Index() {
   const isAllowed = ip === ALLOWED_IP;
   const systemOpen = isWithinOpenHours(new Date(now));
   const elapsed = activeSession
-    ? now - new Date(activeSession.start_time ?? activeSession.start_time ?? new Date().toISOString()).getTime()
+    ? now - new Date(activeSession.start_time ?? new Date().toISOString()).getTime()
     : 0;
 
-  // Cargar notificaciones iniciales con useCallback
   const fetchNotifications = useCallback(async (name: string) => {
     if (!name) return;
     const { data, error } = await supabase
@@ -123,12 +203,11 @@ export default function Index() {
     if (!error && data) setNotifications(data);
   }, []);
 
-  // Función para calcular y actualizar la racha del usuario
   const fetchUserStreak = useCallback(async (name: string) => {
     if (!name) return;
     const { data, error } = await supabase
       .from('sesiones')
-      .select('start_time, start_time')
+      .select('start_time')
       .eq('user_name', name);
 
     if (!error && data) {
@@ -177,6 +256,41 @@ export default function Index() {
       supabase.removeChannel(channel);
     };
   }, [authUserName, fetchNotifications, fetchUserStreak]);
+
+  // Escuchar broadcasts del administrador en tiempo real
+  useEffect(() => {
+    const broadcastChannel = supabase
+      .channel('public:broadcast')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'broadcast',
+        },
+        (payload) => {
+          const newMessage = payload.new as { message: string };
+          
+          // Alerta visual inmediata
+          Alert.alert('📢 Aviso del Admin', newMessage.message);
+          
+          // Disparar notificación push local
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: "Mensaje de la Biblioteca",
+              body: newMessage.message,
+              sound: true,
+            },
+            trigger: null,
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(broadcastChannel);
+    };
+  }, []);
 
   const handleLogin = async () => {
     const name = authUserName.trim();
@@ -317,7 +431,7 @@ export default function Index() {
       setIp(currentIp);
 
       const endIso = new Date().toISOString();
-      const startTime = new Date(activeSession.start_time ?? activeSession.start_time ?? endIso).getTime();
+      const startTime = new Date(activeSession.start_time ?? endIso).getTime();
       const { error } = await supabase
         .from('sesiones')
         .update({
@@ -562,75 +676,6 @@ export default function Index() {
       </View>
     </SafeAreaView>
   );
-}
-
-function getArgHour(d: Date = new Date()) {
-  return (d.getUTCHours() + 24 - 3) % 24;
-}
-
-function isWithinOpenHours(d: Date = new Date()) {
-  const h = getArgHour(d);
-  return h >= OPEN_HOUR_AR && h < CLOSE_HOUR_AR;
-}
-
-async function fetchPublicIp(): Promise<string | null> {
-  try {
-    const response = await fetch('https://api.ipify.org?format=json');
-    const data = await response.json();
-    return data?.ip ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function calculateStreak(sessions: { start_time?: string | null; start_time?: string | null }[]): number {
-  if (!sessions || sessions.length === 0) return 0;
-
-  const uniqueDates = Array.from(
-    new Set(
-      sessions.map((s) => {
-        const rawDate = s.start_time ?? s.start_time;
-        if (!rawDate) return null;
-        return new Date(rawDate).toISOString().split('T')[0];
-      }).filter(Boolean)
-    )
-  ).sort((a, b) => (b! > a! ? 1 : -1)) as string[];
-
-  if (uniqueDates.length === 0) return 0;
-
-  let streak = 0;
-  const today = new Date().toISOString().split('T')[0];
-  
-  const yesterdayDate = new Date();
-  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-  const yesterday = yesterdayDate.toISOString().split('T')[0];
-
-  const latestDate = uniqueDates[0];
-  if (latestDate !== today && latestDate !== yesterday) {
-    return 0;
-  }
-
-  let expectedDate = new Date(latestDate);
-  
-  for (let i = 0; i < uniqueDates.length; i++) {
-    const expectedStr = expectedDate.toISOString().split('T')[0];
-    if (uniqueDates[i] === expectedStr) {
-      streak++;
-      expectedDate.setDate(expectedDate.getDate() - 1);
-    } else {
-      break;
-    }
-  }
-
-  return streak;
-}
-
-function formatDuration(ms: number) {
-  const total = Math.floor(ms / 1000);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 const styles = StyleSheet.create({
