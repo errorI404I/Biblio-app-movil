@@ -1,13 +1,15 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MinijuegoScreen from './minijuego';
 import ShopScreen from './shop';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
+import { Audio } from 'expo-av';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -37,45 +39,33 @@ Notifications.setNotificationHandler({
 });
 
 async function registerForPushNotificationsAsync(name: string) {
-  if (!name || !Device.isDevice) {
-    console.log("No es un dispositivo físico o falta el nombre.");
-    return;
-  }
-  
+  if (!name || !Device.isDevice) return;
   try {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
-
     if (existingStatus !== 'granted') {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
-    
-    if (finalStatus !== 'granted') {
-      Alert.alert('Permiso requerido', 'Necesitas habilitar las notificaciones en los ajustes de tu celular para recibir avisos.');
-      return;
-    }
-
+    if (finalStatus !== 'granted') return;
     const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-    
-    if (!projectId) {
-      console.log('Falta configurar el projectId de EAS en el app.json');
-      return;
-    }
-
+    if (!projectId) return;
     const pushTokenData = await Notifications.getExpoPushTokenAsync({ projectId });
-    console.log('Token obtenido con éxito:', pushTokenData.data);
-    
-    const { error } = await supabase
-      .from('user_wallet')
-      .update({ expo_push_token: pushTokenData.data })
-      .eq('user_name', name);
+    await supabase.from('user_wallet').update({ expo_push_token: pushTokenData.data }).eq('user_name', name);
+  } catch (e) {
+    console.log('Error push token:', e);
+  }
+}
 
-    if (error) {
-      console.log('Error al guardar el token en Supabase:', error.message);
+async function checkAndRegisterPushToken(name: string) {
+  if (!name) return;
+  try {
+    const { data } = await supabase.from('user_wallet').select('expo_push_token').eq('user_name', name).single();
+    if (data && !data.expo_push_token) {
+      await registerForPushNotificationsAsync(name);
     }
   } catch (e) {
-    console.log('Excepción al obtener el push token:', e);
+    console.log('Error check token:', e);
   }
 }
 
@@ -119,7 +109,6 @@ async function fetchPublicIp(): Promise<string | null> {
 
 function calculateStreak(sessions: { start_time?: string | null }[]): number {
   if (!sessions || sessions.length === 0) return 0;
-
   const uniqueDates = Array.from(
     new Set(
       sessions.map((s) => {
@@ -131,21 +120,16 @@ function calculateStreak(sessions: { start_time?: string | null }[]): number {
   ).sort((a, b) => (b! > a! ? 1 : -1)) as string[];
 
   if (uniqueDates.length === 0) return 0;
-
   let streak = 0;
   const today = new Date().toISOString().split('T')[0];
-  
   const yesterdayDate = new Date();
   yesterdayDate.setDate(yesterdayDate.getDate() - 1);
   const yesterday = yesterdayDate.toISOString().split('T')[0];
 
   const latestDate = uniqueDates[0];
-  if (latestDate !== today && latestDate !== yesterday) {
-    return 0;
-  }
+  if (latestDate !== today && latestDate !== yesterday) return 0;
 
   let expectedDate = new Date(latestDate);
-  
   for (let i = 0; i < uniqueDates.length; i++) {
     const expectedStr = expectedDate.toISOString().split('T')[0];
     if (uniqueDates[i] === expectedStr) {
@@ -155,7 +139,6 @@ function calculateStreak(sessions: { start_time?: string | null }[]): number {
       break;
     }
   }
-
   return streak;
 }
 
@@ -165,6 +148,270 @@ function formatDuration(ms: number) {
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// --- Buscador y Conversor de Audio ---
+async function getDirectAudioUrlFromName(songName: string): Promise<string | null> {
+  try {
+    const searchRes = await fetch(`https://pipedapi.kavin.rocks/search?q=${encodeURIComponent(songName)}&filter=videos`);
+    const searchData = await searchRes.json();
+    if (!searchData?.items?.length) return null;
+
+    const videoId = searchData.items[0].url.split('/watch?v=')[1];
+    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+    const cobaltRes = await fetch('https://api.cobalt.tools/api/json', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: youtubeUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
+    });
+
+    const cobaltData = await cobaltRes.json();
+    return cobaltData.url || cobaltData.picker?.[0]?.url || null;
+  } catch (error) {
+    console.error("Error al obtener audio:", error);
+    return null;
+  }
+}
+
+export function MobileMusicPlayer({ userName }: { userName: string }) {
+  const [isConnected, setIsConnected] = useState(false);
+  const [currentSongData, setCurrentSongData] = useState({ name: 'Esperando canción...', url: '' });
+  const [modalVisible, setModalVisible] = useState(false);
+  const [songInput, setSongInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  
+  const [allSongs, setAllSongs] = useState<string[]>([
+    'Queen - Bohemian Rhapsody',
+    'Hans Zimmer - Interstellar Main Theme',
+    'Charly Garcia - Inconsciente Colectivo',
+    'Lofi Hip Hop Beats - Study Music',
+    'Daft Punk - Get Lucky',
+    'Soda Stereo - De Musica Ligera'
+  ]);
+  
+  const sound = useRef<Audio.Sound | null>(null);
+
+  const loadSongSuggestions = async () => {
+    try {
+      const { data } = await supabase.from('song_queue').select('song_name').limit(50);
+      if (data && data.length > 0) {
+        const dbSongs = data.map(item => item.song_name);
+        setAllSongs(prev => Array.from(new Set([...dbSongs, ...prev])));
+      }
+    } catch (e) {
+      console.log("Error cargando sugerencias:", e);
+    }
+  };
+
+  useEffect(() => {
+    async function setup() {
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: true, shouldDuckAndroid: true });
+      loadSongSuggestions();
+    }
+    setup();
+    return () => { if (sound.current) sound.current.unloadAsync(); };
+  }, []);
+
+  useEffect(() => {
+    const fetchCurrentState = async () => {
+      const { data } = await supabase.from('player_state').select('*').eq('id', 1);
+      if (data && data.length > 0) {
+        setCurrentSongData({ name: data[0].song_title || 'Música en vivo', url: data[0].current_song || '' });
+      }
+    };
+    fetchCurrentState();
+
+    const channel = supabase.channel('public:player_state')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'player_state', filter: 'id=eq.1' }, 
+        async (payload: any) => {
+          const newName = payload.new.song_title || 'Música en vivo';
+          const newUrl = payload.new.current_song;
+          setCurrentSongData({ name: newName, url: newUrl });
+          if (isConnected && newUrl) {
+            if (sound.current) await sound.current.unloadAsync();
+            const { sound: newSound } = await Audio.Sound.createAsync({ uri: newUrl }, { shouldPlay: true });
+            sound.current = newSound;
+          }
+        })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [isConnected]);
+
+  const toggleConnection = async () => {
+    try {
+      if (isConnected) {
+        if (sound.current) await sound.current.stopAsync();
+        setIsConnected(false);
+      } else {
+        if (!currentSongData.url) return Alert.alert("Aviso", "No hay ninguna canción reproduciéndose.");
+        if (sound.current) await sound.current.unloadAsync();
+        const { sound: newSound } = await Audio.Sound.createAsync({ uri: currentSongData.url }, { shouldPlay: true });
+        sound.current = newSound;
+        setIsConnected(true);
+      }
+    } catch (e) {
+      Alert.alert("Error", "No se pudo reproducir el audio.");
+    }
+  };
+
+  const handleTextChange = (text: string) => {
+    setSongInput(text);
+    if (text.trim().length > 0) {
+      setSuggestions(allSongs.filter(song => song.toLowerCase().includes(text.toLowerCase())));
+    } else {
+      setSuggestions([]);
+    }
+  };
+const handleAddSongToQueue = async () => {
+    if (!songInput.trim()) return Alert.alert('Atención', 'Escribe el nombre de la canción.');
+    setLoading(true);
+    try {
+      // 1. Verificar monedas del usuario actual
+      const { data: walletData, error: walletError } = await supabase
+        .from('user_wallet')
+        .select('coins')
+        .eq('user_name', userName);
+
+      if (walletError || !walletData || walletData.length === 0) {
+        Alert.alert('Error', 'No se encontró la billetera del usuario.');
+        setLoading(false);
+        return;
+      }
+
+      if (walletData[0].coins < 1) {
+        Alert.alert('Monedas insuficientes', 'Necesitas al menos 1 🪙 para pedir una canción.');
+        setLoading(false);
+        return;
+      }
+
+      console.log("Buscando audio para:", songInput);
+      const directMp3Url = await getDirectAudioUrlFromName(songInput.trim());
+      
+      if (!directMp3Url) {
+        Alert.alert('Error', 'La API externa no pudo convertir esta canción a MP3 directo. Prueba con otro nombre.');
+        setLoading(false);
+        return;
+      }
+
+      console.log("Audio obtenido con éxito:", directMp3Url);
+
+      // 2. Descontar la moneda
+      const { error: updateError } = await supabase
+        .from('user_wallet')
+        .update({ coins: walletData[0].coins - 1 })
+        .eq('user_name', userName);
+
+      if (updateError) {
+        console.error("Error al descontar moneda:", updateError);
+        throw updateError;
+      }
+
+      // 3. Insertar en la cola (song_queue)
+      const { error: queueError } = await supabase
+        .from('song_queue')
+        .insert({ 
+          song_name: songInput.trim(), 
+          user_name: userName, 
+          played: false 
+        });
+
+      if (queueError) {
+        console.error("Error al insertar en song_queue:", queueError);
+        Alert.alert('Error en Base de Datos', queueError.message);
+        setLoading(false);
+        return;
+      }
+
+      // 4. Actualizar el estado global del reproductor
+      const { error: playerError } = await supabase
+        .from('player_state')
+        .update({ 
+          current_song: directMp3Url, 
+          song_title: songInput.trim() 
+        })
+        .eq('id', 1);
+
+      if (playerError) {
+        console.error("Error al actualizar player_state:", playerError);
+      }
+
+      Alert.alert('¡Canción en cola y sonando! 🎶', `"${songInput}" fue procesada con éxito.`);
+      setSongInput('');
+      setSuggestions([]);
+      setModalVisible(false);
+      loadSongSuggestions();
+    } catch (err: any) {
+      console.error("Excepción en handleAddSongToQueue:", err);
+      Alert.alert('Error', err?.message || 'No se pudo procesar la solicitud.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleSkipSong = async () => {
+    try {
+      const { data: walletData, error: walletError } = await supabase.from('user_wallet').select('coins').eq('user_name', userName);
+      const cost = 10;
+      if (walletError || !walletData || walletData.length === 0 || walletData[0].coins < cost) {
+        Alert.alert('Monedas insuficientes', 'Necesitas 10 monedas (🪙) para saltear la canción.');
+        return;
+      }
+      await supabase.from('user_wallet').update({ coins: walletData[0].coins - cost }).eq('user_name', userName);
+      Alert.alert('⏭️ ¡Salto aplicado!', 'Se han descontado 10 monedas.');
+    } catch (err) {
+      Alert.alert('Error', 'No se pudo saltear la canción.');
+    }
+  };
+
+  return (
+    <View style={spotifyStyles.playerCard}>
+      <View style={spotifyStyles.albumArt}><Text style={{ fontSize: 18 }}>🎧</Text></View>
+      <View style={spotifyStyles.trackInfo}>
+        <Text style={spotifyStyles.trackTitle} numberOfLines={1}>{currentSongData.name}</Text>
+        <Text style={spotifyStyles.trackArtist}>{isConnected ? '🟢 Conectado' : '🔴 Desconectado'}</Text>
+      </View>
+      <View style={spotifyStyles.controlsRow}>
+        <Pressable style={[spotifyStyles.connectButton, isConnected ? { backgroundColor: '#ef4444' } : { backgroundColor: '#1db954' }]} onPress={toggleConnection}>
+          <Text style={spotifyStyles.btnText}>{isConnected ? 'Desconectar' : 'Conectarse'}</Text>
+        </Pressable>
+        <Pressable style={spotifyStyles.coinButton} onPress={() => { loadSongSuggestions(); setModalVisible(true); }}>
+          <Text style={spotifyStyles.coinButtonText}>+1 🪙</Text>
+        </Pressable>
+        <Pressable style={spotifyStyles.skipButton} onPress={handleSkipSong}>
+          <Text style={spotifyStyles.skipButtonText}>Saltear (10 🪙)</Text>
+        </Pressable>
+      </View>
+
+      <Modal animationType="slide" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
+        <View style={spotifyStyles.modalOverlay}>
+          <View style={spotifyStyles.modalContent}>
+            <Text style={spotifyStyles.modalTitle}>🎵 Pedir Canción por Nombre</Text>
+            <Text style={spotifyStyles.modalSub}>Costo: 1 Moneda (🪙)</Text>
+            <TextInput style={spotifyStyles.input} placeholder="Ej: Queen - Bohemian Rhapsody" placeholderTextColor="#64748b" value={songInput} onChangeText={handleTextChange} />
+            {suggestions.length > 0 && (
+              <ScrollView style={spotifyStyles.suggestionsContainer} nestedScrollEnabled={true}>
+                {suggestions.map((item, index) => (
+                  <Pressable key={index} style={spotifyStyles.suggestionItem} onPress={() => { setSongInput(item); setSuggestions([]); }}>
+                    <Text style={spotifyStyles.suggestionText}>{item}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+            <View style={spotifyStyles.modalButtons}>
+              <Pressable style={[spotifyStyles.modalBtn, { backgroundColor: '#334155' }]} onPress={() => { setModalVisible(false); setSuggestions([]); }}>
+                <Text style={spotifyStyles.modalBtnText}>Cancelar</Text>
+              </Pressable>
+              <Pressable style={[spotifyStyles.modalBtn, { backgroundColor: '#f59e0b' }]} onPress={handleAddSongToQueue} disabled={loading}>
+                <Text style={spotifyStyles.modalBtnText}>{loading ? 'Procesando...' : 'Anotar (1 🪙)'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
 }
 
 export default function Index() {
@@ -187,7 +434,6 @@ export default function Index() {
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Estados para el Screamer
   const [screamerActive, setScreamerActive] = useState(false);
   const [screamerData, setScreamerData] = useState<{ image: any; isSurprise: boolean } | null>(null);
 
@@ -241,11 +487,10 @@ export default function Index() {
       if (error) throw error;
       setUnreadCount(0);
     } catch (error) {
-      console.log("Error al marcar notificaciones como leídas:", error);
+      console.log("Error al marcar notificaciones:", error);
     }
   }, [authUserName]);
 
-  // Función para comprobar y disparar el Screamer
   const checkAndTriggerScreamer = async (userName: string) => {
     try {
       const { data, error } = await supabase
@@ -264,33 +509,32 @@ export default function Index() {
         .eq('id', data.id);
 
       const isSurprise = Math.random() < 0.01;
-      let selectedImage = '';
-        if (isSurprise) {
-            selectedImage = require('../../assets/job.png'); 
-        } else {
-            const normalPhotos = [
-                require('../../assets/susto1.jpg'),
-                require('../../assets/susto2.jpeg'),
-                require('../../assets/susto3.jpeg'),
-  ];
-  selectedImage = normalPhotos[Math.floor(Math.random() * normalPhotos.length)];
-}
+      let selectedImage;
+      if (isSurprise) {
+        selectedImage = require('../../assets/job.png'); 
+      } else {
+        const normalPhotos = [
+          require('../../assets/susto1.jpg'),
+          require('../../assets/susto2.jpeg'),
+          require('../../assets/susto3.jpeg'),
+        ];
+        selectedImage = normalPhotos[Math.floor(Math.random() * normalPhotos.length)];
+      }
 
       setScreamerData({ image: selectedImage, isSurprise });
       setScreamerActive(true);
     } catch (err) {
-      console.error('Error al comprobar sustos pendientes:', err);
+      console.error('Error sustos:', err);
     }
   };
 
-  // Restaurar sesión al abrir la app y verificar sustos de inmediato
   useEffect(() => {
     const restoreSession = async () => {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
       if (saved) {
         setAuthUserName(saved);
         setIsLoggedIn(true);
-        await registerForPushNotificationsAsync(saved);
+        await checkAndRegisterPushToken(saved);
         await fetchUserStreak(saved);
         await checkAndTriggerScreamer(saved);
       }
@@ -383,7 +627,7 @@ export default function Index() {
           setAuthUserName(name);
           setIsLoggedIn(true);
           await fetchUserStreak(name);
-          await registerForPushNotificationsAsync(name);
+          await checkAndRegisterPushToken(name);
           await checkAndTriggerScreamer(name);
         } else {
           setAuthError('❌ Contraseña incorrecta.');
@@ -401,7 +645,6 @@ export default function Index() {
         await registerForPushNotificationsAsync(name);
       }
     } catch (err) {
-      console.error(err);
       setAuthError('❌ Error al iniciar sesión.');
     }
   };
@@ -484,7 +727,6 @@ export default function Index() {
       await checkAndTriggerScreamer(authUserName);
       Alert.alert('Check-in registrado', `${authUserName} ya quedó activo.`);
     } catch (error) {
-      console.error(error);
       Alert.alert('Error al hacer check-in', 'Reintentá en unos segundos.');
     } finally {
       setBusy(false);
@@ -516,7 +758,6 @@ export default function Index() {
       await refetchLeaders();
       Alert.alert('Check-out', 'Tu sesión quedó cerrada.');
     } catch (error) {
-      console.error(error);
       Alert.alert('Error al cerrar sesión', 'No se pudo registrar el check-out.');
     } finally {
       setBusy(false);
@@ -660,6 +901,8 @@ export default function Index() {
               </Text>
             </View> 
 
+            <MobileMusicPlayer userName={authUserName} />
+
             <View style={styles.card}>
               <Text style={styles.label}>Ranking</Text>
               {leadersLoading ? (
@@ -704,7 +947,6 @@ export default function Index() {
         )}
       </View>
 
-      {/* MODAL DEL SCREAMER */}
       {screamerActive && screamerData && (
         <View style={styles.screamerOverlay}>
           <Image 
@@ -766,6 +1008,162 @@ export default function Index() {
   );
 }
 
+const spotifyStyles = StyleSheet.create({
+  playerCard: {
+    backgroundColor: '#18181b',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: '#27272a',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  albumArt: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: '#27272a',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  trackInfo: {
+    flex: 1,
+    justifyContent: 'center',
+    marginRight: 4,
+  },
+  trackTitle: {
+    color: '#f4f4f5',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  trackArtist: {
+    color: '#a1a1aa',
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  connectButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  coinButton: {
+    backgroundColor: '#f59e0b',
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  skipButton: {
+    backgroundColor: '#27272a',
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#3f3f46',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  btnText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  coinButtonText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  skipButtonText: {
+    color: '#f4f4f5',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    maxHeight: '80%',
+  },
+  modalTitle: {
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  modalSub: {
+    color: '#f59e0b',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 10,
+    backgroundColor: '#0f172a',
+    color: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  suggestionsContainer: {
+    maxHeight: 120,
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  suggestionItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+  },
+  suggestionText: {
+    color: '#cbd5e1',
+    fontSize: 13,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+});
+
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#0f172a' },
   loginSafe: { flex: 1, backgroundColor: '#0f172a', justifyContent: 'center', padding: 20 },
@@ -825,8 +1223,6 @@ const styles = StyleSheet.create({
   navItemActive: { borderTopWidth: 2, borderTopColor: '#f59e0b', backgroundColor: '#1f2937' },
   navText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
   navTextActive: { color: '#f59e0b' },
-  
-  // Estilos del Screamer
   screamerOverlay: {
     position: 'absolute',
     top: 0,
