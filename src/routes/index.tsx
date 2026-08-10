@@ -187,9 +187,9 @@ export default function Index() {
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Estados para el Screamer
+  // Estados para el Screamer dinámico desde la BD
   const [screamerActive, setScreamerActive] = useState(false);
-  const [screamerData, setScreamerData] = useState<{ image: any; isSurprise: boolean } | null>(null);
+  const [screamerData, setScreamerData] = useState<{ image_url: string; is_surprise: boolean } | null>(null);
 
   const { data: leaders, loading: leadersLoading, error: leadersError, refetch: refetchLeaders } =
     useLeaderboard({ limit: 50 });
@@ -245,7 +245,7 @@ export default function Index() {
     }
   }, [authUserName]);
 
-  // Función para comprobar y disparar el Screamer
+  // Función para comprobar y disparar el Screamer desde la Base de Datos
   const checkAndTriggerScreamer = async (userName: string) => {
     try {
       const { data, error } = await supabase
@@ -263,20 +263,21 @@ export default function Index() {
         .update({ triggered: true })
         .eq('id', data.id);
 
-      const isSurprise = Math.random() < 0.01;
-      let selectedImage = '';
-        if (isSurprise) {
-            selectedImage = require('../../assets/job.png'); 
-        } else {
-            const normalPhotos = [
-                require('../../assets/susto1.jpg'),
-                require('../../assets/susto2.jpeg'),
-                require('../../assets/susto3.jpeg'),
-  ];
-  selectedImage = normalPhotos[Math.floor(Math.random() * normalPhotos.length)];
-}
+      // Traer una imagen aleatoria activa desde la tabla 'screamer_gallery' en Supabase
+      const { data: galleryItems, error: galleryError } = await supabase
+        .from('screamer_gallery')
+        .select('image_url, is_surprise')
+        .eq('active', true);
 
-      setScreamerData({ image: selectedImage, isSurprise });
+      if (galleryError || !galleryItems || galleryItems.length === 0) {
+        console.log('No hay imágenes de susto configuradas en la base de datos.');
+        return;
+      }
+
+      // Seleccionar una imagen al azar de la base de datos
+      const randomScreamer = galleryItems[Math.floor(Math.random() * galleryItems.length)];
+
+      setScreamerData({ image_url: randomScreamer.image_url, is_surprise: randomScreamer.is_surprise });
       setScreamerActive(true);
     } catch (err) {
       console.error('Error al comprobar sustos pendientes:', err);
@@ -704,16 +705,16 @@ export default function Index() {
         )}
       </View>
 
-      {/* MODAL DEL SCREAMER */}
+      {/* MODAL DEL SCREAMER (Dinámico desde la Base de Datos) */}
       {screamerActive && screamerData && (
         <View style={styles.screamerOverlay}>
           <Image 
-            source={screamerData.image} 
+            source={{ uri: screamerData.image_url }} 
             style={styles.screamerImage} 
             resizeMode="cover"
           />
           <Text style={styles.screamerTitle}>
-            {screamerData.isSurprise ? '😱 ¡¡SORPRESA TERRORÍFICA (1 en 100)!! 😱' : '👻 ¡Te han mandado un susto! 👻'}
+            {screamerData.is_surprise ? '😱 ¡¡SORPRESA TERRORÍFICA (1 en 100)!! 😱' : '👻 ¡Te han mandado un susto! 👻'}
           </Text>
           <Pressable 
             style={styles.screamerButton} 

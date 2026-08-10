@@ -2,34 +2,19 @@ import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/integrations/supabase/client';
-import { SHOP_ITEMS } from '@/constants/shopCatalog';
 
 const STORAGE_KEY = 'horasbiblio_user_name';
 
 async function sendPushNotification(expoPushToken: string, title: string, body: string) {
   if (!expoPushToken) return;
-
-  const message = {
-    to: expoPushToken,
-    sound: 'default',
-    title: title,
-    body: body,
-    data: { someData: 'goes here' },
-  };
-
+  const message = { to: expoPushToken, sound: 'default', title: title, body: body, data: { someData: 'goes here' } };
   try {
     await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Accept-encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-      },
+      headers: { Accept: 'application/json', 'Accept-encoding': 'gzip, deflate', 'Content-Type': 'application/json' },
       body: JSON.stringify(message),
     });
-  } catch (e) {
-    console.log('Error enviando push notification:', e);
-  }
+  } catch (e) { console.log('Error enviando push notification:', e); }
 }
 
 export default function ShopScreen() {
@@ -38,21 +23,17 @@ export default function ShopScreen() {
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [hoursToCoinsRate, setHoursToCoinsRate] = useState(10);
   const [coinsToHoursRate, setCoinsToHoursRate] = useState(15);
-  const [shopItems, setShopItems] = useState(SHOP_ITEMS);
+  const [shopItems, setShopItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [activeItemsMap, setActiveItemsMap] = useState<{ [key: string]: boolean }>({});
-
   const [recipientName, setRecipientName] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [transferError, setTransferError] = useState('');
   const [transferring, setTransferring] = useState(false);
-
-  // Estados para el autocompletado de transferencia de monedas
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // Estados específicos para el ítem de Screamer (Castigo)
   const [screamerModalVisible, setScreamerModalVisible] = useState(false);
   const [screamerTarget, setScreamerTarget] = useState('');
   const [screamerSuggestions, setScreamerSuggestions] = useState<string[]>([]);
@@ -60,7 +41,6 @@ export default function ShopScreen() {
   const [screamerLoading, setScreamerLoading] = useState(false);
 
   const [purchasingId, setPurchasingId] = useState<string | null>(null);
-
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
   const modalScale = useRef(new Animated.Value(0)).current;
@@ -95,23 +75,11 @@ export default function ShopScreen() {
   }, []);
 
   const loadData = async (name: string) => {
-    const { data: wallet } = await supabase
-      .from('user_wallet')
-      .select('coins')
-      .eq('user_name', name)
-      .maybeSingle();
-
+    const { data: wallet } = await supabase.from('user_wallet').select('coins').eq('user_name', name).maybeSingle();
     if (wallet) setCoins(wallet.coins || 0);
 
-    const { data: sessionData } = await supabase
-      .from('sesiones')
-      .select('total_minutes, id')
-      .eq('user_name', name);
-
-    if (sessionData) {
-      const totalMins = sessionData.reduce((acc, curr) => acc + (curr.total_minutes || 0), 0);
-      setTotalMinutes(totalMins);
-    }
+    const { data: sessionData } = await supabase.from('sesiones').select('total_minutes, id').eq('user_name', name);
+    if (sessionData) setTotalMinutes(sessionData.reduce((acc, curr) => acc + (curr.total_minutes || 0), 0));
 
     const { data: config } = await supabase.from('app_config').select('*');
     if (config) {
@@ -121,87 +89,43 @@ export default function ShopScreen() {
       if (cth) setCoinsToHoursRate(Number(cth.value));
     }
 
-    const { data: invData } = await supabase
-      .from('user_inventory')
-      .select('item_id, expires_at, is_active')
-      .eq('user_name', name)
-      .eq('is_active', true);
+    const { data: itemsFromDb } = await supabase.from('shop_items').select('*');
+    if (itemsFromDb) setShopItems(itemsFromDb);
 
+    const { data: invData } = await supabase.from('user_inventory').select('item_id, expires_at').eq('user_name', name).eq('is_active', true);
     const activeMap: { [key: string]: boolean } = {};
     if (invData) {
       const nowTime = Date.now();
       invData.forEach((inv) => {
-        if (inv.expires_at) {
-          if (new Date(inv.expires_at).getTime() > nowTime) {
-            activeMap[inv.item_id] = true;
-          }
-        } else {
-          activeMap[inv.item_id] = true;
-        }
+        if (!inv.expires_at || new Date(inv.expires_at).getTime() > nowTime) activeMap[inv.item_id] = true;
       });
     }
     setActiveItemsMap(activeMap);
-    setShopItems(SHOP_ITEMS);
   };
 
-  // Autocompletado general para transferencias
-  const handleSearchUsers = async (text: string) => {
-    setRecipientName(text);
-    if (text.trim().length === 0) {
-      setSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from('user_wallet')
-      .select('user_name')
-      .ilike('user_name', `%${text}%`)
-      .limit(5);
-
-    if (data && !error) {
-      const names = data.map(item => item.user_name).filter(n => n.toLowerCase() !== userName.toLowerCase());
-      setSuggestions(names);
-      setShowSuggestions(names.length > 0);
-    }
-  };
-
-  // Autocompletado específico para el buscador de la víctima del Screamer
-  const handleSearchScreamerTarget = async (text: string) => {
-    setScreamerTarget(text);
-    if (text.trim().length === 0) {
-      setScreamerSuggestions([]);
-      setShowScreamerSuggestions(false);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from('user_wallet')
-      .select('user_name')
-      .ilike('user_name', `%${text}%`)
-      .limit(5);
-
-    if (data && !error) {
-      const names = data.map(item => item.user_name).filter(n => n.toLowerCase() !== userName.toLowerCase());
-      setScreamerSuggestions(names);
-      setShowScreamerSuggestions(names.length > 0);
+  const handleSearchUsers = async (text: string, isScreamer = false) => {
+    if (isScreamer) setScreamerTarget(text); else setRecipientName(text);
+    if (text.trim().length === 0) { isScreamer ? setShowScreamerSuggestions(false) : setShowSuggestions(false); return; }
+    const { data } = await supabase.from('user_wallet').select('user_name').ilike('user_name', `%${text}%`).limit(5);
+    if (data) {
+      const names = data.map(i => i.user_name).filter(n => n.toLowerCase() !== userName.toLowerCase());
+      if (isScreamer) { setScreamerSuggestions(names); setShowScreamerSuggestions(names.length > 0); }
+      else { setSuggestions(names); setShowSuggestions(names.length > 0); }
     }
   };
 
   const handleConvertHoursToCoins = async () => {
     const minutesNeeded = 60;
     if (totalMinutes < minutesNeeded) {
-      showSuccessModal('⚠️ Necesitas al menos 1 hora de estudio acumulada (60 min) para convertir.');
+      showSuccessModal(`⚠️ Necesitas al menos 1 hora de estudio acumulada (${minutesNeeded} min) para convertir.`);
       return;
     }
-
     try {
       const { data: sessions, error: fetchErr } = await supabase
         .from('sesiones')
         .select('*')
         .eq('user_name', userName)
         .order('start_time', { ascending: true });
-
       if (fetchErr || !sessions) throw fetchErr;
 
       let remainingToSubtract = minutesNeeded;
@@ -209,7 +133,6 @@ export default function ShopScreen() {
         if (remainingToSubtract <= 0) break;
         const currentMins = sess.total_minutes || 0;
         if (currentMins <= 0) continue;
-
         if (currentMins >= remainingToSubtract) {
           const newMins = currentMins - remainingToSubtract;
           await supabase.from('sesiones').update({ total_minutes: newMins }).eq('id', sess.id);
@@ -222,46 +145,37 @@ export default function ShopScreen() {
 
       const newCoins = coins + hoursToCoinsRate;
       await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
-
       setCoins(newCoins);
-      setTotalMinutes(prev => prev - 60);
+      setTotalMinutes(prev => prev - minutesNeeded);
       showSuccessModal(`¡Intercambio exitoso!\nConvertiste 1 hora por ${hoursToCoinsRate} monedas 🪙.`);
     } catch (err) {
-      console.error(err);
       showSuccessModal('❌ No se pudo procesar el intercambio.');
     }
   };
 
   const handleConvertCoinsToHours = async () => {
+    const minutesToAdd = 60;
     if (coins < coinsToHoursRate) {
       showSuccessModal(`⚠️ Necesitas ${coinsToHoursRate} monedas para comprar 1 hora.`);
       return;
     }
-
     try {
       const newCoins = coins - coinsToHoursRate;
       const nowIso = new Date().toISOString();
-
-      const { error: walletErr } = await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
-      if (walletErr) throw walletErr;
-
-      const { error: sessionErr } = await supabase.from('sesiones').insert({
+      await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
+      await supabase.from('sesiones').insert({
         user_name: userName,
         start_time: nowIso,
         end_time: nowIso,
-        total_minutes: 60,
+        total_minutes: minutesToAdd,
         last_seen: nowIso,
         multiplier: 1,
         event_name: "Compra en Tienda (Monedas ➔ Horas)",
       });
-
-      if (sessionErr) throw sessionErr;
-
       setCoins(newCoins);
-      setTotalMinutes(prev => prev + 60);
-      showSuccessModal(`¡Compra exitosa!\nCanjeaste ${coinsToHoursRate} monedas por 1 hora (+60 min).`);
+      setTotalMinutes(prev => prev + minutesToAdd);
+      showSuccessModal(`¡Compra exitosa!\nCanjeaste ${coinsToHoursRate} monedas por 1 hora (+${minutesToAdd} min).`);
     } catch (err) {
-      console.error(err);
       showSuccessModal('❌ No se pudo completar la compra de horas.');
     }
   };
@@ -275,41 +189,29 @@ export default function ShopScreen() {
       setTransferError('⚠️ Ingresa un usuario válido y un monto mayor a 0.');
       return;
     }
-
     if (target.toLowerCase() === userName.toLowerCase()) {
       setTransferError('⚠️ No puedes transferirte monedas a ti mismo.');
       return;
     }
-
     if (coins < amount) {
-      setTransferError('⚠️ No tienes suficientes monedas para esta transferencia.');
+      setTransferError('⚠️ No tienes suficientes monedas.');
       return;
     }
 
     setTransferring(true);
     try {
-      const { data: recipientWallet, error: recipErr } = await supabase
-        .from('user_wallet')
-        .select('*')
-        .eq('user_name', target)
-        .maybeSingle();
-
-      if (recipErr || !recipientWallet) {
-        setTransferError(`❌ El usuario "${target}" no existe en el sistema.`);
+      const { data: recipientWallet } = await supabase.from('user_wallet').select('*').eq('user_name', target).maybeSingle();
+      if (!recipientWallet) {
+        setTransferError(`❌ El usuario "${target}" no existe.`);
         setTransferring(false);
         return;
       }
-
       const newSenderCoins = coins - amount;
       const newRecipientCoins = (recipientWallet.coins || 0) + amount;
 
       await supabase.from('user_wallet').update({ coins: newSenderCoins }).eq('user_name', userName);
       await supabase.from('user_wallet').update({ coins: newRecipientCoins }).eq('user_name', target);
-
-      await supabase.from('notifications').insert({
-        user_name: target,
-        message: `🪙 ¡${userName} te ha enviado ${amount} monedas!`,
-      });
+      await supabase.from('notifications').insert({ user_name: target, message: `🪙 ¡${userName} te ha enviado ${amount} monedas!` });
 
       if (recipientWallet?.expo_push_token) {
         await sendPushNotification(recipientWallet.expo_push_token, '¡Nueva transferencia! 🪙', `${userName} te ha enviado ${amount} monedas.`);
@@ -319,145 +221,65 @@ export default function ShopScreen() {
       setRecipientName('');
       setTransferAmount('');
       setShowSuggestions(false);
-      showSuccessModal(`¡Transferencia exitosa!\nHas enviado ${amount} monedas 🪙 a ${target}.`);
+      showSuccessModal(`¡Transferencia exitosa!\nEnviaste ${amount} monedas 🪙 a ${target}.`);
     } catch (err) {
-      console.error(err);
-      setTransferError('❌ Error de red. Transacción cancelada.');
+      setTransferError('❌ Error de red.');
     } finally {
       setTransferring(false);
     }
   };
 
+  const handleBuyItem = async (item: any) => {
+    if (item.id === 'screamer_susto') { 
+      setScreamerModalVisible(true); 
+      return; 
+    }
+    if (activeItemsMap[item.id]) { showSuccessModal('⚠️ Ya tienes este ítem activo.'); return; }
+    if (coins < item.price) { showSuccessModal('⚠️ Monedas insuficientes.'); return; }
+
+    setPurchasingId(item.id);
+    try {
+      const newCoins = coins - item.price;
+      await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
+      const expiresAt = item.type === 'temporal' ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
+      await supabase.from('user_inventory').upsert({ user_name: userName, item_id: item.id, is_active: true, expires_at: expiresAt, type: item.type }, { onConflict: 'user_name, item_id' });
+      setCoins(newCoins);
+      setActiveItemsMap(prev => ({ ...prev, [item.id]: true }));
+      showSuccessModal(`¡Compra exitosa: ${item.name}! 🎉`);
+    } catch (err) { showSuccessModal('❌ No se pudo procesar la compra.'); } finally { setPurchasingId(null); }
+  };
+
   const handleBuyScreamer = async () => {
-    const target = screamerTarget.trim();
-    const screamerPrice = 30;
+    // Buscamos dinámicamente el precio del screamer desde el array shopItems en lugar de usar un 30 fijo
+    const screamerItem = shopItems.find(i => i.id === 'screamer_susto');
+    const screamerPrice = screamerItem ? screamerItem.price : 30; // Fallback por seguridad si no carga
 
-    if (!target) {
-      showSuccessModal('⚠️ Ingresa el nombre de la víctima.');
-      return;
-    }
-
-    if (target.toLowerCase() === userName.toLowerCase()) {
-      showSuccessModal('⚠️ No te puedes asustar a ti mismo.');
-      return;
-    }
-
-    if (coins < screamerPrice) {
-      showSuccessModal(`⚠️ Necesitas ${screamerPrice} monedas para enviar este susto.`);
-      return;
+    if (coins < screamerPrice) { 
+      showSuccessModal(`⚠️ Necesitas ${screamerPrice} monedas.`); 
+      return; 
     }
 
     setScreamerLoading(true);
     try {
-      const { data: targetUser } = await supabase
-        .from('user_wallet')
-        .select('user_name')
-        .eq('user_name', target)
-        .maybeSingle();
-
-      if (!targetUser) {
-        showSuccessModal(`❌ El usuario "${target}" no existe.`);
-        setScreamerLoading(false);
-        return;
-      }
-
+      const { data: targetExists } = await supabase.from('user_wallet').select('user_name').eq('user_name', screamerTarget).maybeSingle();
+      if (!targetExists) { showSuccessModal('❌ El usuario no existe.'); setScreamerLoading(false); return; }
+      
       const newCoins = coins - screamerPrice;
-
-      const { error: walletErr } = await supabase
-        .from('user_wallet')
-        .update({ coins: newCoins })
-        .eq('user_name', userName);
-
-      if (walletErr) throw walletErr;
-
-      const { error: punErr } = await supabase
-        .from('pending_punishments')
-        .insert({
-          target_user: target,
-          from_user: userName,
-          punishment_type: 'screamer',
-          amount: screamerPrice,
-          triggered: false
-        });
-
-      if (punErr) throw punErr;
-
+      await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
+      await supabase.from('pending_punishments').insert({ target_user: screamerTarget, from_user: userName, punishment_type: 'screamer', triggered: false });
+      
       setCoins(newCoins);
-      setScreamerTarget('');
       setScreamerModalVisible(false);
-      setShowScreamerSuggestions(false);
-      showSuccessModal(`👻 ¡Susto enviado con éxito a ${target}!\nLe aparecerá en su próximo check-in.`);
-
-    } catch (err) {
-      console.error(err);
-      showSuccessModal('❌ No se pudo programar el susto.');
-    } finally {
-      setScreamerLoading(false);
+      setScreamerTarget('');
+      showSuccessModal(`👻 ¡Susto enviado a ${screamerTarget}!`);
+    } catch (err) { 
+      showSuccessModal('❌ Error.'); 
+    } finally { 
+      setScreamerLoading(false); 
     }
   };
 
-  const handleBuyItem = async (item: any) => {
-    if (item.id === 'screamer_susto') {
-      setScreamerModalVisible(true);
-      return;
-    }
-
-    if (activeItemsMap[item.id]) {
-      showSuccessModal('⚠️ Ya tienes este ítem activo o adquirido.');
-      return;
-    }
-
-    if (coins < item.price) {
-      showSuccessModal('⚠️ Monedas insuficientes.');
-      return;
-    }
-
-    setPurchasingId(item.id);
-
-    try {
-      const newCoins = coins - item.price;
-      const { error: walletError } = await supabase
-        .from('user_wallet')
-        .update({ coins: newCoins })
-        .eq('user_name', userName);
-
-      if (walletError) throw walletError;
-
-      const expiresAt = item.type === 'temporal' 
-        ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() 
-        : null;
-
-      const { error: invError } = await supabase
-        .from('user_inventory')
-        .upsert({
-          user_name: userName,
-          item_id: item.id,
-          is_active: true,
-          expires_at: expiresAt,
-          type: item.type
-        }, { onConflict: 'user_name, item_id' });
-
-      if (invError) throw invError;
-
-      setCoins(newCoins);
-      setActiveItemsMap(prev => ({ ...prev, [item.id]: true }));
-      showSuccessModal(`¡Compra exitosa: ${item.title}! 🎉`);
-
-    } catch (err) {
-      console.error(err);
-      showSuccessModal('❌ No se pudo procesar la compra.');
-    } finally {
-      setPurchasingId(null);
-    }
-  };
-  
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#f59e0b" />
-      </View>
-    );
-  }
+  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#f59e0b" /></View>;
 
   const hoursDisplay = Math.floor(totalMinutes / 60);
   const minsDisplay = totalMinutes % 60;
@@ -493,29 +315,20 @@ export default function ShopScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>🤝 Transferir Monedas</Text>
-        
         <View style={{ position: 'relative', zIndex: 999, elevation: 5 }}>
           <TextInput
             style={styles.input}
             placeholder="Nombre del destinatario"
             placeholderTextColor="#64748b"
             value={recipientName}
-            onChangeText={handleSearchUsers}
+            onChangeText={(text) => handleSearchUsers(text, false)}
             autoCapitalize="words"
           />
-
           {showSuggestions && (
             <View style={styles.suggestionsContainer}>
               <ScrollView nestedScrollEnabled={true} style={{ maxHeight: 180 }}>
                 {suggestions.map((item, index) => (
-                  <Pressable
-                    key={index}
-                    style={styles.suggestionItem}
-                    onPress={() => {
-                      setRecipientName(item);
-                      setShowSuggestions(false);
-                    }}
-                  >
+                  <Pressable key={index} style={styles.suggestionItem} onPress={() => { setRecipientName(item); setShowSuggestions(false); }}>
                     <Text style={{ color: '#f8fafc', fontSize: 14 }}>👤 {item}</Text>
                   </Pressable>
                 ))}
@@ -532,38 +345,14 @@ export default function ShopScreen() {
           value={transferAmount}
           onChangeText={setTransferAmount}
         />
-
         {transferError ? <Text style={styles.errorText}>{transferError}</Text> : null}
 
-        <Pressable 
-          style={[styles.actionButton, { backgroundColor: '#d97706', marginTop: 4 }, transferring && styles.disabled]} 
-          onPress={handleTransferCoins}
-          disabled={transferring}
-        >
-          {transferring ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.actionButtonText}>Enviar Monedas</Text>
-          )}
+        <Pressable style={[styles.actionButton, { backgroundColor: '#d97706', marginTop: 4 }, transferring && styles.disabled]} onPress={handleTransferCoins} disabled={transferring}>
+          {transferring ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionButtonText}>Enviar Monedas</Text>}
         </Pressable>
       </View>
 
       <Text style={styles.sectionTitle}>Ítems Disponibles</Text>
-
-      <View style={styles.itemCard}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.itemName}>👻 Susto / Screamer</Text>
-          <Text style={styles.itemDesc}>Asusta a alguien en su próximo check-in con una sorpresa terrorífica.</Text>
-          <Text style={styles.itemPrice}>🪙 30 Monedas</Text>
-        </View>
-        <Pressable 
-          style={[styles.buyButton, { backgroundColor: '#7c3aed' }]} 
-          onPress={() => handleBuyItem({ id: 'screamer_susto', title: 'Screamer', price: 30 })}
-        >
-          <Text style={styles.buyButtonText}>Comprar</Text>
-        </Pressable>
-      </View>
-      
       {shopItems.length === 0 ? (
         <Text style={styles.emptyText}>No hay ítems cargados en la tienda todavía.</Text>
       ) : (
@@ -572,25 +361,19 @@ export default function ShopScreen() {
           return (
             <View key={item.id} style={styles.itemCard}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.itemName}>{item.title}</Text>
+                <Text style={styles.itemName}>{item.name}</Text>
                 <Text style={styles.itemDesc}>{item.description}</Text>
                 <Text style={styles.itemPrice}>🪙 {item.price} Monedas</Text>
               </View>
               <Pressable 
-                style={[
-                  styles.buyButton, 
-                  isOwnedOrActive && styles.disabledButton,
-                  purchasingId === item.id && { backgroundColor: '#065f46' }
-                ]} 
+                style={[styles.buyButton, isOwnedOrActive && styles.disabledButton, purchasingId === item.id && { backgroundColor: '#065f46' }]} 
                 onPress={() => handleBuyItem(item)}
                 disabled={purchasingId !== null || isOwnedOrActive}
               >
                 {purchasingId === item.id ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.buyButtonText}>
-                    {isOwnedOrActive ? 'Adquirido' : 'Comprar'}
-                  </Text>
+                  <Text style={styles.buyButtonText}>{isOwnedOrActive ? 'Adquirido' : 'Comprar'}</Text>
                 )}
               </Pressable>
             </View>
@@ -598,36 +381,26 @@ export default function ShopScreen() {
         })
       )}
 
-      {/* MODAL PARA SELECCIONAR VÍCTIMA DEL SCREAMER CON AUTOCOMPLETADO CORREGIDO */}
       {screamerModalVisible && (
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <Text style={styles.modalTitle}>👻 ¡Enviar un Susto!</Text>
             <Text style={styles.modalText}>¿A qué usuario quieres enviarle el screamer?</Text>
             
-            {/* Contenedor con zIndex masivo y overflow visible para producción */}
             <View style={{ position: 'relative', zIndex: 99999, elevation: 99, width: '100%', marginBottom: 15 }}>
               <TextInput
                 style={[styles.input, { width: '100%', marginBottom: 0 }]}
                 placeholder="Nombre de la víctima"
                 placeholderTextColor="#64748b"
                 value={screamerTarget}
-                onChangeText={handleSearchScreamerTarget}
+                onChangeText={(text) => handleSearchUsers(text, true)}
                 autoCapitalize="words"
               />
-
               {showScreamerSuggestions && (
                 <View style={styles.suggestionsContainer}>
                   <ScrollView nestedScrollEnabled={true} style={{ maxHeight: 150 }}>
                     {screamerSuggestions.map((item, index) => (
-                      <Pressable
-                        key={index}
-                        style={styles.suggestionItem}
-                        onPress={() => {
-                          setScreamerTarget(item);
-                          setShowScreamerSuggestions(false);
-                        }}
-                      >
+                      <Pressable key={index} style={styles.suggestionItem} onPress={() => { setScreamerTarget(item); setShowScreamerSuggestions(false); }}>
                         <Text style={{ color: '#f8fafc', fontSize: 14 }}>👤 {item}</Text>
                       </Pressable>
                     ))}
@@ -637,18 +410,10 @@ export default function ShopScreen() {
             </View>
 
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%' }}>
-              <Pressable 
-                style={[styles.modalButton, { backgroundColor: '#475569', flex: 1, marginRight: 8 }]} 
-                onPress={() => setScreamerModalVisible(false)}
-              >
+              <Pressable style={[styles.modalButton, { backgroundColor: '#475569', flex: 1, marginRight: 8 }]} onPress={() => setScreamerModalVisible(false)}>
                 <Text style={[styles.modalButtonText, { color: '#fff' }]}>Cancelar</Text>
               </Pressable>
-
-              <Pressable 
-                style={[styles.modalButton, { backgroundColor: '#7c3aed', flex: 1, marginLeft: 8 }, screamerLoading && styles.disabled]} 
-                onPress={handleBuyScreamer}
-                disabled={screamerLoading}
-              >
+              <Pressable style={[styles.modalButton, { backgroundColor: '#7c3aed', flex: 1, marginLeft: 8 }, screamerLoading && styles.disabled]} onPress={handleBuyScreamer} disabled={screamerLoading}>
                 {screamerLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalButtonText}>Enviar Susto</Text>}
               </Pressable>
             </View>
@@ -658,15 +423,9 @@ export default function ShopScreen() {
 
       {modalVisible && (
         <View style={styles.modalOverlay}>
-          <Animated.View 
-            style={[
-              styles.modalContainer, 
-              { transform: [{ scale: modalScale }], opacity: modalOpacity }
-            ]}
-          >
+          <Animated.View style={[styles.modalContainer, { transform: [{ scale: modalScale }], opacity: modalOpacity }]}>
             <Text style={styles.modalTitle}>✨ Notificación</Text>
             <Text style={styles.modalText}>{modalMessage}</Text>
-            
             <Pressable style={styles.modalButton} onPress={hideSuccessModal}>
               <Text style={styles.modalButtonText}>¡Entendido!</Text>
             </Pressable>
@@ -703,8 +462,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#334155',
-    zIndex: 99999, // Aumentado para producción
-    elevation: 999, // Elevación alta para Android nativo
+    zIndex: 99999,
+    elevation: 999,
     maxHeight: 180,
   },
   suggestionItem: {
@@ -749,7 +508,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.5,
     shadowRadius: 15,
-    overflow: 'visible', // Clave para que las sugerencias no se corten
+    overflow: 'visible',
   },
   modalTitle: {
     color: '#fbbf24',
