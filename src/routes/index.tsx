@@ -574,12 +574,27 @@ export default function Index() {
     );
   }
 
+  // BLOQUEO TOTAL SI LA VERSIÓN ES DESACTUALIZADA (colocado después de todos los hooks)
+  if (versionOutdated) {
+    return (
+      <SafeAreaView style={styles.blockScreenContainer}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.blockCard}>
+          <Text style={styles.blockTitle}>🚀 ¡Actualización Obligatoria!</Text>
+          <Text style={styles.blockSub}>
+            Tu versión requiere actualización obligatoria para continuar usando la aplicación y ver tus datos.
+          </Text>
+          <View style={styles.blockDebugBox}>
+            <Text style={styles.blockDebug}>[DEBUG LOG]: App desactualizada. BLOQUEANDO.</Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
-
-      {/* Si la versión es vieja, VersionChecker se renderiza por encima */}
-      {versionOutdated && <VersionChecker />}
 
       <View style={styles.containerContent}>
         <ScrollView
@@ -970,5 +985,52 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '900',
+  },
+
+  // Estilos de la pantalla de bloqueo total
+  blockScreenContainer: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  blockCard: {
+    backgroundColor: '#111827',
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    width: '100%',
+    maxWidth: 400,
+    alignItems: 'center',
+  },
+  blockTitle: {
+    color: '#f8fafc',
+    fontSize: 22,
+    fontWeight: '900',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  blockSub: {
+    color: '#94a3b8',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  blockDebugBox: {
+    backgroundColor: '#1e293b',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+    width: '100%',
+  },
+  blockDebug: {
+    color: '#ef4444',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });
