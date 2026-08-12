@@ -34,13 +34,22 @@ export default function ShopScreen() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
+  // Estados para el Screamer / Susto
   const [screamerModalVisible, setScreamerModalVisible] = useState(false);
   const [screamerTarget, setScreamerTarget] = useState('');
   const [screamerSuggestions, setScreamerSuggestions] = useState<string[]>([]);
   const [showScreamerSuggestions, setShowScreamerSuggestions] = useState(false);
   const [screamerLoading, setScreamerLoading] = useState(false);
 
+  // Estados genéricos para ítems interactivos de la BD y compra normal
+  const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [customInputText, setCustomInputText] = useState('');
   const [purchasingId, setPurchasingId] = useState<string | null>(null);
+
+  // Estados para compra/venta flexible de horas en cantidad
+  const [bankHoursQuantity, setBankHoursQuantity] = useState(1);
+
+  // Modal de éxito personalizado
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
   const modalScale = useRef(new Animated.Value(0)).current;
@@ -114,10 +123,11 @@ export default function ShopScreen() {
     }
   };
 
+  // Venta flexible de horas en cantidad
   const handleConvertHoursToCoins = async () => {
-    const minutesNeeded = 60;
-    if (totalMinutes < minutesNeeded) {
-      showSuccessModal(`⚠️ Necesitas al menos 1 hora de estudio acumulada (${minutesNeeded} min) para convertir.`);
+    const totalMinutesNeeded = bankHoursQuantity * 60;
+    if (totalMinutes < totalMinutesNeeded) {
+      showSuccessModal(`⚠️ No tienes suficientes horas acumuladas para vender ${bankHoursQuantity} ${bankHoursQuantity === 1 ? 'hora' : 'horas'}.`);
       return;
     }
     try {
@@ -128,7 +138,7 @@ export default function ShopScreen() {
         .order('start_time', { ascending: true });
       if (fetchErr || !sessions) throw fetchErr;
 
-      let remainingToSubtract = minutesNeeded;
+      let remainingToSubtract = totalMinutesNeeded;
       for (const sess of sessions) {
         if (remainingToSubtract <= 0) break;
         const currentMins = sess.total_minutes || 0;
@@ -143,24 +153,27 @@ export default function ShopScreen() {
         }
       }
 
-      const newCoins = coins + hoursToCoinsRate;
+      const earnedCoins = bankHoursQuantity * hoursToCoinsRate;
+      const newCoins = coins + earnedCoins;
       await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
       setCoins(newCoins);
-      setTotalMinutes(prev => prev - minutesNeeded);
-      showSuccessModal(`¡Intercambio exitoso!\nConvertiste 1 hora por ${hoursToCoinsRate} monedas 🪙.`);
+      setTotalMinutes(prev => prev - totalMinutesNeeded);
+      showSuccessModal(`¡Intercambio exitoso!\nVendiste ${bankHoursQuantity} ${bankHoursQuantity === 1 ? 'hora' : 'horas'} por ${earnedCoins} monedas 🪙.`);
     } catch (err) {
       showSuccessModal('❌ No se pudo procesar el intercambio.');
     }
   };
 
+  // Compra flexible de horas en cantidad
   const handleConvertCoinsToHours = async () => {
-    const minutesToAdd = 60;
-    if (coins < coinsToHoursRate) {
-      showSuccessModal(`⚠️ Necesitas ${coinsToHoursRate} monedas para comprar 1 hora.`);
+    const totalCoinsNeeded = bankHoursQuantity * coinsToHoursRate;
+    const minutesToAdd = bankHoursQuantity * 60;
+    if (coins < totalCoinsNeeded) {
+      showSuccessModal(`⚠️ Necesitas ${totalCoinsNeeded} monedas para comprar ${bankHoursQuantity} ${bankHoursQuantity === 1 ? 'hora' : 'horas'}.`);
       return;
     }
     try {
-      const newCoins = coins - coinsToHoursRate;
+      const newCoins = coins - totalCoinsNeeded;
       const nowIso = new Date().toISOString();
       await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
       await supabase.from('sesiones').insert({
@@ -170,11 +183,11 @@ export default function ShopScreen() {
         total_minutes: minutesToAdd,
         last_seen: nowIso,
         multiplier: 1,
-        event_name: "Compra en Tienda (Monedas ➔ Horas)",
+        event_name: "Compra en Tienda (Monedas ➔ Horas en Cantidad)",
       });
       setCoins(newCoins);
       setTotalMinutes(prev => prev + minutesToAdd);
-      showSuccessModal(`¡Compra exitosa!\nCanjeaste ${coinsToHoursRate} monedas por 1 hora (+${minutesToAdd} min).`);
+      showSuccessModal(`¡Compra exitosa!\nCanjeaste ${totalCoinsNeeded} monedas por ${bankHoursQuantity} ${bankHoursQuantity === 1 ? 'hora' : 'horas'} (+${minutesToAdd} min).`);
     } catch (err) {
       showSuccessModal('❌ No se pudo completar la compra de horas.');
     }
@@ -229,34 +242,96 @@ export default function ShopScreen() {
     }
   };
 
-  const handleBuyItem = async (item: any) => {
+  const handleOpenBuyModal = (item: any) => {
     if (item.id === 'screamer_susto') { 
       setScreamerModalVisible(true); 
       return; 
     }
-    if (activeItemsMap[item.id]) { showSuccessModal('⚠️ Ya tienes este ítem activo.'); return; }
-    if (coins < item.price) { showSuccessModal('⚠️ Monedas insuficientes.'); return; }
+    // Si la base de datos marca que requiere input, abrimos el modal genérico dinámico
+    if (item.requires_input) {
+      setSelectedItem(item);
+      setCustomInputText('');
+      return;
+    }
+    if (activeItemsMap[item.id]) { 
+      showSuccessModal('⚠️ Ya tienes este ítem activo.'); 
+      return; 
+    }
+    handleBuyNormalItem(item);
+  };
+
+  const handleBuyNormalItem = async (item: any) => {
+    if (coins < item.price) {
+      showSuccessModal('⚠️ Saldo insuficiente.');
+      return;
+    }
 
     setPurchasingId(item.id);
     try {
       const newCoins = coins - item.price;
       await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
+      
       const expiresAt = item.type === 'temporal' ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
       await supabase.from('user_inventory').upsert({ user_name: userName, item_id: item.id, is_active: true, expires_at: expiresAt, type: item.type }, { onConflict: 'user_name, item_id' });
+      
       setCoins(newCoins);
       setActiveItemsMap(prev => ({ ...prev, [item.id]: true }));
-      showSuccessModal(`¡Compra exitosa: ${item.name}! 🎉`);
-    } catch (err) { showSuccessModal('❌ No se pudo procesar la compra.'); } finally { setPurchasingId(null); }
+      showSuccessModal(`¡Compra exitosa! Has adquirido ${item.name} 🎉`);
+    } catch (err) { 
+      showSuccessModal('❌ No se pudo procesar la compra.'); 
+    } finally { 
+      setPurchasingId(null); 
+    }
+  };
+
+  // Manejador genérico para cualquier ítem interactivo que requiera texto
+  const handleBuyInteractiveItem = async () => {
+    if (!selectedItem) return;
+    if (!customInputText.trim()) {
+      showSuccessModal('⚠️ Por favor completa el campo requerido.');
+      return;
+    }
+    if (coins < selectedItem.price) {
+      showSuccessModal('⚠️ Saldo insuficiente.');
+      return;
+    }
+
+    setPurchasingId(selectedItem.id);
+    try {
+      const newCoins = coins - selectedItem.price;
+      await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
+      
+      // Comportamiento genérico basado en la propiedad del ítem o ID
+      if (selectedItem.id === 'megafono' || selectedItem.requires_input) {
+        await supabase.from('notifications').insert({
+          user_name: userName,
+          message: `📢 [Megáfono de ${userName}]: "${customInputText.trim()}"`,
+        });
+      }
+
+      setCoins(newCoins);
+      setActiveItemsMap(prev => ({ ...prev, [selectedItem.id]: true }));
+      setSelectedItem(null);
+      setCustomInputText('');
+      showSuccessModal(`¡Compra exitosa! Has adquirido ${selectedItem.name} 🎉`);
+    } catch (err) { 
+      showSuccessModal('❌ No se pudo procesar la compra.'); 
+    } finally { 
+      setPurchasingId(null); 
+    }
   };
 
   const handleBuyScreamer = async () => {
-    // Buscamos dinámicamente el precio del screamer desde el array shopItems en lugar de usar un 30 fijo
     const screamerItem = shopItems.find(i => i.id === 'screamer_susto');
-    const screamerPrice = screamerItem ? screamerItem.price : 30; // Fallback por seguridad si no carga
+    const screamerPrice = screamerItem ? screamerItem.price : 30;
 
     if (coins < screamerPrice) { 
       showSuccessModal(`⚠️ Necesitas ${screamerPrice} monedas.`); 
       return; 
+    }
+    if (!screamerTarget.trim()) {
+      showSuccessModal('⚠️ Ingresa el nombre de la víctima.');
+      return;
     }
 
     setScreamerLoading(true);
@@ -273,7 +348,7 @@ export default function ShopScreen() {
       setScreamerTarget('');
       showSuccessModal(`👻 ¡Susto enviado a ${screamerTarget}!`);
     } catch (err) { 
-      showSuccessModal('❌ Error.'); 
+      showSuccessModal('❌ Error al enviar susto.'); 
     } finally { 
       setScreamerLoading(false); 
     }
@@ -294,20 +369,33 @@ export default function ShopScreen() {
         <Text style={styles.balanceText}>⏱️ {hoursDisplay}h {minsDisplay}m</Text>
       </View>
 
+      {/* Banco de Intercambio con Selector de Cantidad de Horas */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>🏦 Banco de Intercambio</Text>
+        <Text style={styles.cardDesc}>Selecciona cuántas horas deseas operar:</Text>
+
+        <View style={styles.qtyRow}>
+          <Pressable style={styles.qtyBtn} onPress={() => setBankHoursQuantity(Math.max(1, bankHoursQuantity - 1))}>
+            <Text style={styles.qtyBtnText}>-</Text>
+          </Pressable>
+          <Text style={styles.qtyValue}>{bankHoursQuantity} {bankHoursQuantity === 1 ? 'Hora' : 'Horas'}</Text>
+          <Pressable style={styles.qtyBtn} onPress={() => setBankHoursQuantity(bankHoursQuantity + 1)}>
+            <Text style={styles.qtyBtnText}>+</Text>
+          </Pressable>
+        </View>
+
         <View style={styles.conversionRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.cardDesc}>1 Hora ➔ {hoursToCoinsRate} Monedas</Text>
+            <Text style={styles.subCardDesc}>Vender por {bankHoursQuantity * hoursToCoinsRate} 🪙</Text>
             <Pressable style={styles.actionButton} onPress={handleConvertHoursToCoins}>
-              <Text style={styles.actionButtonText}>Vender 1 Hora</Text>
+              <Text style={styles.actionButtonText}>Vender</Text>
             </Pressable>
           </View>
           <View style={{ width: 10 }} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.cardDesc}>{coinsToHoursRate} Monedas ➔ 1 Hora</Text>
+            <Text style={styles.subCardDesc}>Comprar por {bankHoursQuantity * coinsToHoursRate} 🪙</Text>
             <Pressable style={[styles.actionButton, styles.buyHourButton]} onPress={handleConvertCoinsToHours}>
-              <Text style={styles.actionButtonText}>Comprar 1 Hora</Text>
+              <Text style={styles.actionButtonText}>Comprar</Text>
             </Pressable>
           </View>
         </View>
@@ -315,7 +403,7 @@ export default function ShopScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>🤝 Transferir Monedas</Text>
-        <View style={{ position: 'relative', zIndex: 999, elevation: 5 }}>
+        <View style={{ position: 'relative', zIndex: 99, elevation: 5 }}>
           <TextInput
             style={styles.input}
             placeholder="Nombre del destinatario"
@@ -367,7 +455,7 @@ export default function ShopScreen() {
               </View>
               <Pressable 
                 style={[styles.buyButton, isOwnedOrActive && styles.disabledButton, purchasingId === item.id && { backgroundColor: '#065f46' }]} 
-                onPress={() => handleBuyItem(item)}
+                onPress={() => handleOpenBuyModal(item)}
                 disabled={purchasingId !== null || isOwnedOrActive}
               >
                 {purchasingId === item.id ? (
@@ -381,6 +469,36 @@ export default function ShopScreen() {
         })
       )}
 
+      {/* Modal Genérico para Ítems Interactivos (Basado en Base de Datos) */}
+      {selectedItem && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Comprar: {selectedItem.name}</Text>
+            
+            <Text style={styles.label}>{selectedItem.input_placeholder || 'Escribe el dato requerido:'}</Text>
+            <TextInput
+              style={[styles.input, { width: '100%', marginBottom: 15 }]}
+              placeholder="Escribe aquí..."
+              placeholderTextColor="#64748b"
+              value={customInputText}
+              onChangeText={setCustomInputText}
+            />
+
+            <Text style={styles.totalText}>Total a pagar: {selectedItem.price} 🪙</Text>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', gap: 10 }}>
+              <Pressable style={[styles.modalButton, { backgroundColor: '#475569', flex: 1 }]} onPress={() => setSelectedItem(null)}>
+                <Text style={[styles.modalButtonText, { color: '#fff' }]}>Cancelar</Text>
+              </Pressable>
+              <Pressable style={[styles.modalButton, { backgroundColor: '#f59e0b', flex: 1 }]} onPress={handleBuyInteractiveItem}>
+                <Text style={styles.modalButtonText}>Confirmar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Modal del Screamer / Susto */}
       {screamerModalVisible && (
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
@@ -421,6 +539,7 @@ export default function ShopScreen() {
         </View>
       )}
 
+      {/* Modal General de Éxito / Alertas */}
       {modalVisible && (
         <View style={styles.modalOverlay}>
           <Animated.View style={[styles.modalContainer, { transform: [{ scale: modalScale }], opacity: modalOpacity }]}>
@@ -445,8 +564,9 @@ const styles = StyleSheet.create({
   balanceCard: { flexDirection: 'row', justifyContent: 'space-around', backgroundColor: '#111827', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#1f2937', marginBottom: 15 },
   balanceText: { color: '#fbbf24', fontSize: 15, fontWeight: '700' },
   card: { backgroundColor: '#111827', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#1f2937', marginBottom: 15 },
-  cardTitle: { color: '#f8fafc', fontSize: 16, fontWeight: '700', marginBottom: 10 },
-  cardDesc: { color: '#94a3b8', fontSize: 12, marginBottom: 8, textAlign: 'center' },
+  cardTitle: { color: '#f8fafc', fontSize: 16, fontWeight: '700', marginBottom: 6 },
+  cardDesc: { color: '#94a3b8', fontSize: 12, marginBottom: 10, textAlign: 'center' },
+  subCardDesc: { color: '#94a3b8', fontSize: 11, marginBottom: 6, textAlign: 'center' },
   conversionRow: { flexDirection: 'row', justifyContent: 'space-between' },
   actionButton: { backgroundColor: '#4f46e5', paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
   buyHourButton: { backgroundColor: '#059669' },
@@ -483,6 +603,13 @@ const styles = StyleSheet.create({
   disabledButton: { backgroundColor: '#475569', opacity: 0.8 },
   emptyText: { color: '#64748b', textAlign: 'center', marginTop: 20 },
   disabled: { opacity: 0.6 },
+
+  label: { color: '#cbd5e1', fontSize: 13, fontWeight: '700', marginBottom: 8, alignSelf: 'flex-start' },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 15, justifyContent: 'center' },
+  qtyBtn: { backgroundColor: '#334155', width: 36, height: 36, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
+  qtyBtnText: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  qtyValue: { color: '#f8fafc', fontSize: 16, fontWeight: '900', minWidth: 70, textAlign: 'center' },
+  totalText: { color: '#fbbf24', fontSize: 16, fontWeight: '900', marginBottom: 20, textAlign: 'center' },
 
   modalOverlay: {
     position: 'absolute',

@@ -1,7 +1,10 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import MinijuegoScreen from './minijuego';
+import RuletaScreen from './ruleta';
+import BlackjackScreen from './blackjack';
+import VersusScreen from './ppt';
 import ShopScreen from './shop';
+import VersionChecker from './VersionChecker';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
@@ -18,6 +21,7 @@ import {
   TextInput,
   View,
   Image,
+  Dimensions,
 } from 'react-native';
 import { useLeaderboard } from '@/hooks/useLeaderboard';
 import { supabase } from '@/integrations/supabase/client';
@@ -26,6 +30,7 @@ const ALLOWED_IP = '131.221.0.8';
 const STORAGE_KEY = 'horasbiblio_user_name';
 const OPEN_HOUR_AR = 7;
 const CLOSE_HOUR_AR = 20;
+const { width: SCREEN_Width } = Dimensions.get('window');
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -38,7 +43,6 @@ Notifications.setNotificationHandler({
 
 async function registerForPushNotificationsAsync(name: string) {
   if (!name || !Device.isDevice) {
-    console.log("No es un dispositivo físico o falta el nombre.");
     return;
   }
   
@@ -52,28 +56,18 @@ async function registerForPushNotificationsAsync(name: string) {
     }
     
     if (finalStatus !== 'granted') {
-      Alert.alert('Permiso requerido', 'Necesitas habilitar las notificaciones en los ajustes de tu celular para recibir avisos.');
       return;
     }
 
     const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-    
-    if (!projectId) {
-      console.log('Falta configurar el projectId de EAS en el app.json');
-      return;
-    }
+    if (!projectId) return;
 
     const pushTokenData = await Notifications.getExpoPushTokenAsync({ projectId });
-    console.log('Token obtenido con éxito:', pushTokenData.data);
     
-    const { error } = await supabase
+    await supabase
       .from('user_wallet')
       .update({ expo_push_token: pushTokenData.data })
       .eq('user_name', name);
-
-    if (error) {
-      console.log('Error al guardar el token en Supabase:', error.message);
-    }
   } catch (e) {
     console.log('Excepción al obtener el push token:', e);
   }
@@ -173,7 +167,14 @@ export default function Index() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  const [activeTab, setActiveTab] = useState<'home' | 'minijuego' | 'tienda' | 'eventos'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'ruleta' | 'blackjack' | 'versus' | 'tienda'>('home');
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  const handleTabPress = (tabName: 'home' | 'ruleta' | 'blackjack' | 'versus' | 'tienda', index: number) => {
+    setActiveTab(tabName);
+    scrollViewRef.current?.scrollTo({ x: index * SCREEN_Width, animated: true });
+  };
+
   const [ip, setIp] = useState<string | null>(null);
   const [ipLoading, setIpLoading] = useState(true);
   const [activeSession, setActiveSession] = useState<SessionRow | null>(null);
@@ -187,9 +188,11 @@ export default function Index() {
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Estados para el Screamer dinámico desde la BD
   const [screamerActive, setScreamerActive] = useState(false);
   const [screamerData, setScreamerData] = useState<{ image_url: string; is_surprise: boolean } | null>(null);
+
+  const [missingPushToken, setMissingPushToken] = useState(false);
+  const [versionOutdated, setVersionOutdated] = useState(false);
 
   const { data: leaders, loading: leadersLoading, error: leadersError, refetch: refetchLeaders } =
     useLeaderboard({ limit: 50 });
@@ -199,6 +202,31 @@ export default function Index() {
   const elapsed = activeSession
     ? now - new Date(activeSession.start_time ?? new Date().toISOString()).getTime()
     : 0;
+
+  // Verificación de Versión con Supabase
+  useEffect(() => {
+    const checkVersion = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('app_config')
+          .select('value, valor')
+          .eq('key', 'min_app_version')
+          .single();
+
+        if (!error && data) {
+          const requiredVersion = String(data.valor ?? data.value);
+          const currentVersion = Constants.expoConfig?.version || '2.0.0';
+          
+          if (requiredVersion && requiredVersion !== currentVersion) {
+            setVersionOutdated(true);
+          }
+        }
+      } catch (e) {
+        console.log('Error al verificar versión:', e);
+      }
+    };
+    checkVersion();
+  }, []);
 
   const fetchNotifications = useCallback(async (name: string) => {
     if (!name) return;
@@ -229,6 +257,21 @@ export default function Index() {
     }
   }, []);
 
+  const checkPushTokenStatus = useCallback(async (name: string) => {
+    if (!name) return;
+    const { data } = await supabase
+      .from('user_wallet')
+      .select('expo_push_token')
+      .eq('user_name', name)
+      .maybeSingle();
+
+    if (data && !data.expo_push_token) {
+      setMissingPushToken(true);
+    } else {
+      setMissingPushToken(false);
+    }
+  }, []);
+
   const marcarNotificacionesComoLeidas = useCallback(async () => {
     if (!authUserName) return;
     try {
@@ -245,7 +288,6 @@ export default function Index() {
     }
   }, [authUserName]);
 
-  // Función para comprobar y disparar el Screamer desde la Base de Datos
   const checkAndTriggerScreamer = async (userName: string) => {
     try {
       const { data, error } = await supabase
@@ -263,20 +305,14 @@ export default function Index() {
         .update({ triggered: true })
         .eq('id', data.id);
 
-      // Traer una imagen aleatoria activa desde la tabla 'screamer_gallery' en Supabase
       const { data: galleryItems, error: galleryError } = await supabase
         .from('screamer_gallery')
         .select('image_url, is_surprise')
         .eq('active', true);
 
-      if (galleryError || !galleryItems || galleryItems.length === 0) {
-        console.log('No hay imágenes de susto configuradas en la base de datos.');
-        return;
-      }
+      if (galleryError || !galleryItems || galleryItems.length === 0) return;
 
-      // Seleccionar una imagen al azar de la base de datos
       const randomScreamer = galleryItems[Math.floor(Math.random() * galleryItems.length)];
-
       setScreamerData({ image_url: randomScreamer.image_url, is_surprise: randomScreamer.is_surprise });
       setScreamerActive(true);
     } catch (err) {
@@ -284,7 +320,6 @@ export default function Index() {
     }
   };
 
-  // Restaurar sesión al abrir la app y verificar sustos de inmediato
   useEffect(() => {
     const restoreSession = async () => {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
@@ -293,16 +328,18 @@ export default function Index() {
         setIsLoggedIn(true);
         await registerForPushNotificationsAsync(saved);
         await fetchUserStreak(saved);
+        await checkPushTokenStatus(saved);
         await checkAndTriggerScreamer(saved);
       }
     };
     restoreSession();
-  }, [fetchUserStreak]);
+  }, [fetchUserStreak, checkPushTokenStatus]);
 
   useEffect(() => {
     if (!authUserName) return;
     fetchNotifications(authUserName);
     fetchUserStreak(authUserName);
+    checkPushTokenStatus(authUserName);
 
     const channel = supabase
       .channel('public:notifications')
@@ -327,37 +364,7 @@ export default function Index() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [authUserName, fetchNotifications, fetchUserStreak]);
-
-  useEffect(() => {
-    const broadcastChannel = supabase
-      .channel('public:broadcast')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'broadcast',
-        },
-        (payload) => {
-          const newMessage = payload.new as { message: string };
-          Alert.alert('📢 Aviso del Admin', newMessage.message);
-          Notifications.scheduleNotificationAsync({
-            content: {
-              title: "Mensaje de la Biblioteca",
-              body: newMessage.message,
-              sound: true,
-            },
-            trigger: null,
-          });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(broadcastChannel);
-    };
-  }, []);
+  }, [authUserName, fetchNotifications, fetchUserStreak, checkPushTokenStatus]);
 
   const handleLogin = async () => {
     const name = authUserName.trim();
@@ -385,6 +392,7 @@ export default function Index() {
           setIsLoggedIn(true);
           await fetchUserStreak(name);
           await registerForPushNotificationsAsync(name);
+          await checkPushTokenStatus(name);
           await checkAndTriggerScreamer(name);
         } else {
           setAuthError('❌ Contraseña incorrecta.');
@@ -400,6 +408,7 @@ export default function Index() {
         setIsLoggedIn(true);
         await fetchUserStreak(name);
         await registerForPushNotificationsAsync(name);
+        await checkPushTokenStatus(name);
       }
     } catch (err) {
       console.error(err);
@@ -569,143 +578,187 @@ export default function Index() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
 
+      {/* Si la versión es vieja, VersionChecker se renderiza por encima */}
+      {versionOutdated && <VersionChecker />}
+
       <View style={styles.containerContent}>
-        {activeTab === 'home' && (
-          <ScrollView contentContainerStyle={styles.content}>
-            <View style={styles.headerRow}>
-              <View>
-                <Text style={styles.title}>Horas <Text style={styles.accent}>biblio</Text></Text>
-                <Text style={styles.subtitle}>Hola, <Text style={{ color: '#f59e0b', fontWeight: '700' }}>{authUserName}</Text></Text>
+        <ScrollView
+          ref={scrollViewRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={(event) => {
+            const offsetX = event.nativeEvent.contentOffset.x;
+            const index = Math.round(offsetX / SCREEN_Width);
+            const tabs: ('home' | 'ruleta' | 'blackjack' | 'versus' | 'tienda')[] = ['home', 'ruleta', 'blackjack', 'versus', 'tienda'];
+            if (tabs[index]) {
+              setActiveTab(tabs[index]);
+            }
+          }}
+          style={{ flex: 1 }}
+          contentContainerStyle={{ width: SCREEN_Width * 5 }}
+        >
+          {/* Pestaña 1: Home */}
+          <View style={{ width: SCREEN_Width, flex: 1 }}>
+            <ScrollView contentContainerStyle={styles.content}>
+              <View style={styles.headerRow}>
+                <View>
+                  <Text style={styles.title}>Horas <Text style={styles.accent}>biblio</Text></Text>
+                  <Text style={styles.subtitle}>Hola, <Text style={{ color: '#f59e0b', fontWeight: '700' }}>{authUserName}</Text></Text>
+                </View>
+
+                <Pressable 
+                  style={styles.bellButton} 
+                  onPress={() => {
+                    const willShow = !showNotificationsModal;
+                    setShowNotificationsModal(willShow);
+                    if (willShow) {
+                      marcarNotificacionesComoLeidas();
+                    }
+                  }}
+                >
+                  <Text style={{ fontSize: 20 }}>🔔</Text>
+                  {unreadCount > 0 && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{unreadCount}</Text>
+                    </View>
+                  )}
+                </Pressable>
               </View>
 
-              <Pressable 
-                style={styles.bellButton} 
-                onPress={() => {
-                  const willShow = !showNotificationsModal;
-                  setShowNotificationsModal(willShow);
-                  if (willShow) {
-                    marcarNotificacionesComoLeidas();
-                  }
-                }}
-              >
-                <Text style={{ fontSize: 20 }}>🔔</Text>
-                {unreadCount > 0 && (
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{unreadCount}</Text>
+              {missingPushToken && (
+                <Pressable 
+                  style={styles.notificationBanner}
+                  onPress={async () => {
+                    await registerForPushNotificationsAsync(authUserName);
+                    await checkPushTokenStatus(authUserName);
+                  }}
+                >
+                  <Text style={styles.notificationBannerText}>
+                    🔔 Activa las notificaciones para enterarte de avisos importantes. <Text style={{ textDecorationLine: 'underline', fontWeight: '900' }}>Activar</Text>
+                  </Text>
+                </Pressable>
+              )}
+
+              {showNotificationsModal && (
+                <View style={styles.notificationDropdown}>
+                  <Text style={styles.dropdownTitle}>📢 Últimas Notificaciones</Text>
+                  {notifications.length === 0 ? (
+                    <Text style={styles.emptyNotif}>No tienes notificaciones recientes.</Text>
+                  ) : (
+                    notifications.map((item) => (
+                      <View key={item.id} style={styles.notifItem}>
+                        <Text style={styles.notifText}>{item.message}</Text>
+                        <Text style={styles.notifTime}>
+                          {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
+
+              <View style={styles.card}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.label}>Estado de la red</Text>
+                  <Text style={[styles.status, isAllowed ? styles.ok : styles.warn]}>{statusLabel}</Text>
+                </View>
+                <Text style={styles.meta}>IP: {ip ?? '—'}</Text>
+                <Text style={styles.meta}>Horario: {systemOpen ? 'Abierto' : 'Cerrado'} • {String(OPEN_HOUR_AR).padStart(2, '0')}:00–{String(CLOSE_HOUR_AR).padStart(2, '0')}:00</Text>
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.label}>Control de Asistencia</Text>
+
+                {!activeSession ? (
+                  <Pressable
+                    style={[styles.primaryButton, busy && styles.disabledButton]}
+                    onPress={handleCheckIn}
+                    disabled={busy}
+                  >
+                    {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Hacer Check-in</Text>}
+                  </Pressable>
+                ) : (
+                  <View style={styles.activeBox}>
+                    <Text style={styles.activeLabel}>Sesión activa</Text>
+                    <Text style={styles.activeText}>{activeSession.user_name}</Text>
+                    <Text style={styles.elapsed}>Tiempo: {formatDuration(elapsed)}</Text>
+                    <Pressable style={styles.secondaryButton} onPress={handleCheckOut} disabled={busy}>
+                      <Text style={styles.secondaryButtonText}>Hacer Check-out</Text>
+                    </Pressable>
                   </View>
                 )}
-              </Pressable>
-            </View>
+              </View>
+              
+              <View style={styles.card}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.label}>Racha de Estudio</Text>
+                  <Text style={{ fontSize: 18, fontWeight: '700', color: '#f59e0b' }}>
+                    🔥 {userStreak} {userStreak === 1 ? 'Día' : 'Días'}
+                  </Text>
+                </View>
+                <Text style={styles.meta}>
+                  {userStreak > 0 
+                    ? '¡Excelente constancia! Mantén el ritmo diario.' 
+                    : 'Haz un check-in hoy para iniciar tu racha.'}
+                </Text>
+              </View> 
 
-            {showNotificationsModal && (
-              <View style={styles.notificationDropdown}>
-                <Text style={styles.dropdownTitle}>📢 Últimas Notificaciones</Text>
-                {notifications.length === 0 ? (
-                  <Text style={styles.emptyNotif}>No tienes notificaciones recientes.</Text>
+              <View style={styles.card}>
+                <Text style={styles.label}>Ranking</Text>
+                {leadersLoading ? (
+                  <ActivityIndicator color="#f59e0b" style={styles.rankLoader} />
+                ) : leadersError ? (
+                  <View>
+                    <Text style={styles.rankError}>{leadersError}</Text>
+                    <Pressable style={styles.retryButton} onPress={() => void refetchLeaders()}>
+                      <Text style={styles.retryButtonText}>Reintentar</Text>
+                    </Pressable>
+                  </View>
+                ) : leaders.length === 0 ? (
+                  <Text style={styles.meta}>Todavía no hay registros.</Text>
                 ) : (
-                  notifications.map((item) => (
-                    <View key={item.id} style={styles.notifItem}>
-                      <Text style={styles.notifText}>{item.message}</Text>
-                      <Text style={styles.notifTime}>
-                        {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </Text>
-                    </View>
-                  ))
+                  leaders.map((leader, index) => {
+                    const totalMins = leader.minutes || 0;
+                    const h = Math.floor(totalMins / 60);
+                    const m = totalMins % 60;
+                    const timeFormatted = h > 0 ? `${h}h ${m}m` : `${m}m`;
+
+                    return (
+                      <View key={`${leader.user_name}-${index}`} style={styles.rankRow}>
+                        <Text style={styles.rankPlace}>#{index + 1}</Text>
+                        <Text style={styles.rankName}>{leader.user_name}</Text>
+                        <Text style={styles.rankMinutes}>{timeFormatted}</Text>
+                      </View>
+                    );
+                  })
                 )}
               </View>
-            )}
-
-            <View style={styles.card}>
-              <View style={styles.rowBetween}>
-                <Text style={styles.label}>Estado de la red</Text>
-                <Text style={[styles.status, isAllowed ? styles.ok : styles.warn]}>{statusLabel}</Text>
-              </View>
-              <Text style={styles.meta}>IP: {ip ?? '—'}</Text>
-              <Text style={styles.meta}>Horario: {systemOpen ? 'Abierto' : 'Cerrado'} • {String(OPEN_HOUR_AR).padStart(2, '0')}:00–{String(CLOSE_HOUR_AR).padStart(2, '0')}:00</Text>
-            </View>
-
-            <View style={styles.card}>
-              <Text style={styles.label}>Control de Asistencia</Text>
-
-              {!activeSession ? (
-                <Pressable
-                  style={[styles.primaryButton, busy && styles.disabledButton]}
-                  onPress={handleCheckIn}
-                  disabled={busy}
-                >
-                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Hacer Check-in</Text>}
-                </Pressable>
-              ) : (
-                <View style={styles.activeBox}>
-                  <Text style={styles.activeLabel}>Sesión activa</Text>
-                  <Text style={styles.activeText}>{activeSession.user_name}</Text>
-                  <Text style={styles.elapsed}>Tiempo: {formatDuration(elapsed)}</Text>
-                  <Pressable style={styles.secondaryButton} onPress={handleCheckOut} disabled={busy}>
-                    <Text style={styles.secondaryButtonText}>Hacer Check-out</Text>
-                  </Pressable>
-                </View>
-              )}
-            </View>
-            
-            <View style={styles.card}>
-              <View style={styles.rowBetween}>
-                <Text style={styles.label}>Racha de Estudio</Text>
-                <Text style={{ fontSize: 18, fontWeight: '700', color: '#f59e0b' }}>
-                  🔥 {userStreak} {userStreak === 1 ? 'Día' : 'Días'}
-                </Text>
-              </View>
-              <Text style={styles.meta}>
-                {userStreak > 0 
-                  ? '¡Excelente constancia! Mantén el ritmo diario.' 
-                  : 'Haz un check-in hoy para iniciar tu racha.'}
-              </Text>
-            </View> 
-
-            <View style={styles.card}>
-              <Text style={styles.label}>Ranking</Text>
-              {leadersLoading ? (
-                <ActivityIndicator color="#f59e0b" style={styles.rankLoader} />
-              ) : leadersError ? (
-                <View>
-                  <Text style={styles.rankError}>{leadersError}</Text>
-                  <Pressable style={styles.retryButton} onPress={() => void refetchLeaders()}>
-                    <Text style={styles.retryButtonText}>Reintentar</Text>
-                  </Pressable>
-                </View>
-              ) : leaders.length === 0 ? (
-                <Text style={styles.meta}>Todavía no hay registros.</Text>
-              ) : (
-                leaders.map((leader, index) => {
-                  const totalMins = leader.minutes || 0;
-                  const h = Math.floor(totalMins / 60);
-                  const m = totalMins % 60;
-                  const timeFormatted = h > 0 ? `${h}h ${m}m` : `${m}m`;
-
-                  return (
-                    <View key={`${leader.user_name}-${index}`} style={styles.rankRow}>
-                      <Text style={styles.rankPlace}>#{index + 1}</Text>
-                      <Text style={styles.rankName}>{leader.user_name}</Text>
-                      <Text style={styles.rankMinutes}>{timeFormatted}</Text>
-                    </View>
-                  );
-                })
-              )}
-            </View>
-          </ScrollView>
-        )}
-
-        {activeTab === 'minijuego' && <MinijuegoScreen />}
-        {activeTab === 'tienda' && <ShopScreen />}
-
-        {activeTab === 'eventos' && (
-          <View style={styles.centerScreen}>
-            <Text style={styles.sectionTitle}>📅 Eventos</Text>
-            <Text style={styles.meta}>Sección de próximos eventos y charlas.</Text>
+            </ScrollView>
           </View>
-        )}
+
+          {/* Pestaña 2: Ruleta */}
+          <View style={{ width: SCREEN_Width, flex: 1 }}>
+            <RuletaScreen />
+          </View>
+
+          {/* Pestaña 3: Blackjack */}
+          <View style={{ width: SCREEN_Width, flex: 1 }}>
+            <BlackjackScreen />
+          </View>
+
+          {/* Pestaña 4: Duelo / Versús */}
+          <View style={{ width: SCREEN_Width, flex: 1 }}>
+            <VersusScreen />
+          </View>
+
+          {/* Pestaña 5: Tienda */}
+          <View style={{ width: SCREEN_Width, flex: 1 }}>
+            <ShopScreen />
+          </View>
+        </ScrollView>
       </View>
 
-      {/* MODAL DEL SCREAMER (Dinámico desde la Base de Datos) */}
       {screamerActive && screamerData && (
         <View style={styles.screamerOverlay}>
           <Image 
@@ -741,28 +794,48 @@ export default function Index() {
         </Pressable>
       </View>
 
-      <View style={styles.bottomNav}>
+      {/* Barra de navegación inferior */}
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false} 
+        contentContainerStyle={styles.bottomNavContainer}
+        style={styles.bottomNavScroll}
+      >
         <Pressable 
           style={[styles.navItem, activeTab === 'home' && styles.navItemActive]} 
-          onPress={() => setActiveTab('home')}
+          onPress={() => handleTabPress('home', 0)}
         >
           <Text style={[styles.navText, activeTab === 'home' && styles.navTextActive]}>🏠 Inicio</Text>
         </Pressable>
 
         <Pressable 
-          style={[styles.navItem, activeTab === 'minijuego' && styles.navItemActive]} 
-          onPress={() => setActiveTab('minijuego')}
+          style={[styles.navItem, activeTab === 'ruleta' && styles.navItemActive]} 
+          onPress={() => handleTabPress('ruleta', 1)}
         >
-          <Text style={[styles.navText, activeTab === 'minijuego' && styles.navTextActive]}>🎮 Minijuego</Text>
+          <Text style={[styles.navText, activeTab === 'ruleta' && styles.navTextActive]}>🎰 Ruleta</Text>
+        </Pressable>
+
+        <Pressable 
+          style={[styles.navItem, activeTab === 'blackjack' && styles.navItemActive]} 
+          onPress={() => handleTabPress('blackjack', 2)}
+        >
+          <Text style={[styles.navText, activeTab === 'blackjack' && styles.navTextActive]}>🃏 Blackjack</Text>
+        </Pressable>
+
+        <Pressable 
+          style={[styles.navItem, activeTab === 'versus' && styles.navItemActive]} 
+          onPress={() => handleTabPress('versus', 3)}
+        >
+          <Text style={[styles.navText, activeTab === 'versus' && styles.navTextActive]}>⚔️ Duelo</Text>
         </Pressable>
 
         <Pressable 
           style={[styles.navItem, activeTab === 'tienda' && styles.navItemActive]} 
-          onPress={() => setActiveTab('tienda')}
+          onPress={() => handleTabPress('tienda', 4)}
         >
           <Text style={[styles.navText, activeTab === 'tienda' && styles.navTextActive]}>🛒 Tienda</Text>
         </Pressable>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -773,7 +846,7 @@ const styles = StyleSheet.create({
   loginCard: { backgroundColor: '#111827', borderRadius: 20, padding: 22, borderWidth: 1, borderColor: '#1f2937' },
   loginTitle: { color: '#f8fafc', fontSize: 28, fontWeight: '700', textAlign: 'center', marginBottom: 4 },
   loginSub: { color: '#94a3b8', fontSize: 14, textAlign: 'center', marginBottom: 20 },
-  containerContent: { flex: 1 },
+  containerContent: { flex: 1, overflow: 'hidden', paddingBottom: 60 },
   content: { padding: 20, paddingBottom: 80 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   bellButton: { backgroundColor: '#1e293b', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#334155' },
@@ -785,7 +858,6 @@ const styles = StyleSheet.create({
   notifText: { color: '#cbd5e1', fontSize: 13 },
   notifTime: { color: '#64748b', fontSize: 10, marginTop: 2 },
   emptyNotif: { color: '#64748b', fontSize: 12, textAlign: 'center', paddingVertical: 6 },
-  centerScreen: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   sectionTitle: { color: '#f8fafc', fontSize: 24, fontWeight: '700', marginBottom: 8 },
   title: { color: '#f8fafc', fontSize: 32, fontWeight: '700' },
   accent: { color: '#f59e0b' },
@@ -821,19 +893,54 @@ const styles = StyleSheet.create({
   floatingMenu: { backgroundColor: '#1e293b', borderRadius: 10, padding: 6, marginBottom: 8, borderWidth: 1, borderColor: '#334155', width: 140 },
   menuItem: { paddingVertical: 8, paddingHorizontal: 10 },
   menuItemText: { color: '#f8fafc', fontSize: 13, fontWeight: '600' },
-  bottomNav: { flexDirection: 'row', backgroundColor: '#111827', borderTopWidth: 1, borderTopColor: '#1f2937', height: 60 },
-  navItem: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  bottomNavScroll: {
+    backgroundColor: '#111827',
+    borderTopWidth: 1,
+    borderTopColor: '#1f2937',
+    height: 60,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  bottomNavContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center',
+    height: 60,
+  },
+  navItem: { 
+    paddingHorizontal: 22, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    height: '100%' 
+  },
   navItemActive: { borderTopWidth: 2, borderTopColor: '#f59e0b', backgroundColor: '#1f2937' },
   navText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
   navTextActive: { color: '#f59e0b' },
   
-  // Estilos del Screamer
+  notificationBanner: {
+    backgroundColor: '#1e1b4b',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#4338ca',
+  },
+  notificationBannerText: {
+    color: '#c7d2fe',
+    fontSize: 13,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+
   screamerOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
+    width: '100%',
+    height: '100%',
     backgroundColor: '#000',
     justifyContent: 'center',
     alignItems: 'center',
