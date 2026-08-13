@@ -289,7 +289,9 @@ export default function Index() {
   }, [authUserName]);
 
   const checkAndTriggerScreamer = async (userName: string) => {
+    if (!userName) return;
     try {
+      // 1. Primero buscamos si hay un susto pendiente
       const { data, error } = await supabase
         .from('pending_punishments')
         .select('*')
@@ -298,25 +300,50 @@ export default function Index() {
         .limit(1)
         .maybeSingle();
 
-      if (error || !data) return;
+      if (error) {
+        console.error('Error al buscar sustos pendientes:', error);
+        return;
+      }
+      if (!data) return; // No hay sustos pendientes, salimos normal
 
-      await supabase
-        .from('pending_punishments')
-        .update({ triggered: true })
-        .eq('id', data.id);
-
+      // 2. Antes de marcarlo como visto, traemos la galería para asegurarnos de que hay imágenes
       const { data: galleryItems, error: galleryError } = await supabase
         .from('screamer_gallery')
         .select('image_url, is_surprise')
         .eq('active', true);
 
-      if (galleryError || !galleryItems || galleryItems.length === 0) return;
+      if (galleryError) {
+        console.error('Error al cargar la galería de screamers (¿Problema de RLS?):', galleryError);
+        return;
+      }
 
+      if (!galleryItems || galleryItems.length === 0) {
+        console.log('No hay imágenes de susto activas en la galería.');
+        return;
+      }
+
+      // 3. Si todo lo anterior funcionó, ahora sí marcamos como triggered: true en la base de datos
+      const { error: updateError } = await supabase
+        .from('pending_punishments')
+        .update({ triggered: true })
+        .eq('id', data.id);
+
+      if (updateError) {
+        console.error('Error al actualizar el estado del castigo:', updateError);
+        return;
+      }
+
+      // 4. Seleccionamos la imagen al azar y disparamos el screamer
       const randomScreamer = galleryItems[Math.floor(Math.random() * galleryItems.length)];
-      setScreamerData({ image_url: randomScreamer.image_url, is_surprise: randomScreamer.is_surprise });
+
+      setScreamerData({ 
+        image_url: randomScreamer.image_url, 
+        is_surprise: randomScreamer.is_surprise 
+      });
       setScreamerActive(true);
+
     } catch (err) {
-      console.error('Error al comprobar sustos pendientes:', err);
+      console.error('Error general en checkAndTriggerScreamer:', err);
     }
   };
 

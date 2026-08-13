@@ -286,40 +286,47 @@ export default function ShopScreen() {
 
   // Manejador genérico para cualquier ítem interactivo que requiera texto
   const handleBuyInteractiveItem = async () => {
-    if (!selectedItem) return;
-    if (!customInputText.trim()) {
-      showSuccessModal('⚠️ Por favor completa el campo requerido.');
-      return;
-    }
-    if (coins < selectedItem.price) {
-      showSuccessModal('⚠️ Saldo insuficiente.');
-      return;
-    }
+  if (!selectedItem) return;
+  
+  // Validar si el ítem requiere texto según su configuración en la BD
+  if (selectedItem.requires_input && !customInputText.trim()) {
+    showSuccessModal('⚠️ Por favor completa el campo requerido.');
+    return;
+  }
+  
+  if (coins < selectedItem.price) {
+    showSuccessModal('⚠️ Saldo insuficiente.');
+    return;
+  }
 
-    setPurchasingId(selectedItem.id);
-    try {
-      const newCoins = coins - selectedItem.price;
-      await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
-      
-      // Comportamiento genérico basado en la propiedad del ítem o ID
-      if (selectedItem.id === 'megafono' || selectedItem.requires_input) {
-        await supabase.from('notifications').insert({
-          user_name: userName,
-          message: `📢 [Megáfono de ${userName}]: "${customInputText.trim()}"`,
-        });
-      }
+  setPurchasingId(selectedItem.id);
+  try {
+    const newCoins = coins - selectedItem.price;
+    // 1. Descontar monedas al usuario
+    await supabase.from('user_wallet').update({ coins: newCoins }).eq('user_name', userName);
+    
+    // 2. Enviar la compra al servidor de forma genérica (ej. registrar en el inventario del usuario 
+    // o enviar el payload con el input personalizado para que el backend lo procese)
+    const { error: purchaseError } = await supabase.from('user_inventory').insert({
+      user_name: userName,
+      item_id: selectedItem.id,
+      input_data: customInputText.trim() || null, // El servidor toma este dato genérico y decide qué hacer
+      is_active: true
+    });
 
-      setCoins(newCoins);
-      setActiveItemsMap(prev => ({ ...prev, [selectedItem.id]: true }));
-      setSelectedItem(null);
-      setCustomInputText('');
-      showSuccessModal(`¡Compra exitosa! Has adquirido ${selectedItem.name} 🎉`);
-    } catch (err) { 
-      showSuccessModal('❌ No se pudo procesar la compra.'); 
-    } finally { 
-      setPurchasingId(null); 
-    }
-  };
+    if (purchaseError) throw purchaseError;
+
+    setCoins(newCoins);
+    setActiveItemsMap(prev => ({ ...prev, [selectedItem.id]: true }));
+    setSelectedItem(null);
+    setCustomInputText('');
+    showSuccessModal(`¡Compra exitosa! Has adquirido ${selectedItem.name} 🎉`);
+  } catch (err) {  
+    showSuccessModal('❌ No se pudo procesar la compra.');  
+  } finally {  
+    setPurchasingId(null);  
+  }
+};
 
   const handleBuyScreamer = async () => {
     const screamerItem = shopItems.find(i => i.id === 'screamer_susto');
